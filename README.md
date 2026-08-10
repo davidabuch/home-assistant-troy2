@@ -1,13 +1,27 @@
-# Screen Innovations TRO.Y 2 for Home Assistant
+# Screen Innovations TRO.Y 2 (Troy) for Home Assistant
 
-Custom Home Assistant integration for locally controlling shades connected to a Screen Innovations TRO.Y 2 controller.
+**Direct local control of Screen Innovations TRO.Y shades from Home Assistant — no Bond Bridge Pro required.**
+
+This integration connects Home Assistant directly to the TRO.Y controller at its local IP address. It does not require a Bond Bridge Pro or another control bridge between Home Assistant and TRO.Y.
+
+Because Home Assistant polls TRO.Y directly for shade position, the TRO.Y controller remains the source of truth. This allows Home Assistant to reconcile shade state after a shade is operated by another TRO.Y-connected control, rather than relying only on commands previously sent by Home Assistant.
 
 > [!IMPORTANT]
-> This is an independent community project. It is not affiliated with or endorsed by Screen Innovations or Home Assistant.
+> This is an independent community project. It is not affiliated with or endorsed by Screen Innovations, Bond, or Home Assistant.
+
+## Why use this integration?
+
+- **Direct TRO.Y connection** — communicates with the TRO.Y controller over your local network.
+- **No Bond Bridge Pro required** — Home Assistant talks directly to TRO.Y without requiring an additional bridge for this integration.
+- **Controller-sourced state** — Home Assistant polls TRO.Y for shade position so state can be reconciled when shades are operated elsewhere.
+- **Local control** — normal shade control does not depend on a cloud service.
+- **Position control** — supports open, close, stop, and percentage positioning.
+- **Wired-motor speed control** — supports persistent up, down, and slow speed settings for compatible wired shades.
+- **Automatic shade discovery** — shades returned by the TRO.Y controller are discovered after setup.
 
 ## Current status
 
-Version 0.3.10 is the current field-tested version. It supports local shade discovery, position polling, open/close/stop/position commands, wired-motor speed control, serialized controller traffic, faster polling while a shade is moving, and resilient startup discovery.
+Version 0.3.11 is a presentation and discoverability update to the field-tested 0.3.10 runtime. The integration supports local shade discovery, position polling, open/close/stop/position commands, wired-motor speed control, serialized controller traffic, faster polling while a shade is moving, and resilient startup discovery.
 
 The integration currently uses a legacy-compatible setup flow that asks for the controller IP address, one wired shade node ID, and a friendly name. After setup, all shades returned by that controller are discovered. A controller-first setup flow is planned for v0.4.0.
 
@@ -17,10 +31,10 @@ Until this repository is accepted into a default HACS catalog:
 
 1. Open HACS in Home Assistant.
 2. Add this repository as a custom repository with category **Integration**.
-3. Search for **Screen Innovations TRO.Y 2** and install it.
+3. Search for **Troy** and install **Screen Innovations TRO.Y 2 (Troy)**.
 4. Restart Home Assistant.
 5. Go to **Settings → Devices & services → Add integration**.
-6. Search for **Screen Innovations TRO.Y 2**.
+6. Search for **Troy** and select **Screen Innovations TRO.Y 2 (Troy)**.
 
 ## Manual installation
 
