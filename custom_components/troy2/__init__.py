@@ -38,6 +38,8 @@ from .coordinator import Troy2Coordinator
 
 SETUP_DISCOVERY_SCAN_DELAY_SECONDS = 2
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
 
 async def _async_discover_shades(
     hub_api: Troy2HubApi,
