@@ -19,9 +19,15 @@ Because Home Assistant polls TRO.Y directly for shade position, the TRO.Y contro
 - **Wired-motor speed control** — supports persistent up, down, and slow speed settings for compatible wired shades.
 - **Automatic shade discovery** — shades returned by the TRO.Y controller are discovered after setup.
 
+## Shade compatibility
+
+- **RS485 / wired shades — tested.** Direct control, position feedback, and supported wired-motor speed settings have been field-tested.
+- **Zigbee shades — tested.** Two-way shade control and position/state feedback through TRO.Y have been field-tested.
+- **RTS shades — expected to support basic control, but not yet formally tested.** RTS is a one-way RF technology, so position feedback and state synchronization may differ from wired RS485 and Zigbee shades. Users with TRO.Y-connected RTS shades are encouraged to report their results through GitHub Issues.
+
 ## Current status
 
-Version 0.3.11 is a presentation and discoverability update to the field-tested 0.3.10 runtime. The integration supports local shade discovery, position polling, open/close/stop/position commands, wired-motor speed control, serialized controller traffic, faster polling while a shade is moving, and resilient startup discovery.
+Version 0.3.12 is the current HACS-submission candidate. It preserves the field-tested runtime behavior while documenting shade-technology compatibility. The integration supports local shade discovery, position polling where reported by TRO.Y, open/close/stop/position commands, wired-motor speed control, serialized controller traffic, faster polling while a shade is moving, and resilient startup discovery.
 
 The integration currently uses a legacy-compatible setup flow that asks for the controller IP address, one wired shade node ID, and a friendly name. After setup, all shades returned by that controller are discovered. A controller-first setup flow is planned for v0.4.0.
 
