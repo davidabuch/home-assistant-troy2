@@ -1,0 +1,47 @@
+{
+  "title": "Screen Innovations TRO.Y 2",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a TRO.Y 2 shade",
+        "description": "Connect directly to one Screen Innovations shade through TRO.Y 2.",
+        "data": {
+          "host": "TRO.Y 2 IP address",
+          "node_id": "Shade node ID",
+          "shade_name": "Shade name"
+        },
+        "data_description": {
+          "host": "Enter only the IP address or hostname, without http://.",
+          "node_id": "Enter the wired shade node ID reported by your TRO.Y controller.",
+          "shade_name": "The name shown in Home Assistant and Apple Home."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not read the shade position from TRO.Y 2. Check the IP address and node ID."
+    },
+    "abort": {
+      "already_configured": "This TRO.Y 2 shade is already configured."
+    }
+  },
+  "services": {
+    "set_wired_speeds": {
+      "name": "Set wired shade speeds",
+      "description": "Set the persistent up, down, and slow rolling speeds for an RS485 shade.",
+      "fields": {
+        "up_speed": {
+          "name": "Up speed",
+          "description": "Rolling speed used while opening the shade."
+        },
+        "down_speed": {
+          "name": "Down speed",
+          "description": "Rolling speed used while closing the shade."
+        },
+        "slow_speed": {
+          "name": "Slow speed",
+          "description": "Rolling speed used by the motor's slow movement mode."
+        }
+      }
+    }
+  }
+}

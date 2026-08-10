@@ -1,0 +1,12 @@
+{
+  "domain": "troy2",
+  "name": "Screen Innovations TRO.Y 2",
+  "version": "0.3.10",
+  "config_flow": true,
+  "integration_type": "hub",
+  "documentation": "https://github.com/davidabuch/home-assistant-troy2",
+  "issue_tracker": "https://github.com/davidabuch/home-assistant-troy2/issues",
+  "requirements": [],
+  "codeowners": ["@davidabuch"],
+  "iot_class": "local_polling"
+}

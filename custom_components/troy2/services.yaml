@@ -1,0 +1,33 @@
+set_wired_speeds:
+  target:
+    entity:
+      domain: cover
+      integration: troy2
+  fields:
+    up_speed:
+      required: true
+      example: 25
+      selector:
+        number:
+          min: 10
+          max: 25
+          step: 1
+          mode: box
+    down_speed:
+      required: true
+      example: 10
+      selector:
+        number:
+          min: 10
+          max: 25
+          step: 1
+          mode: box
+    slow_speed:
+      required: true
+      example: 15
+      selector:
+        number:
+          min: 10
+          max: 25
+          step: 1
+          mode: box
