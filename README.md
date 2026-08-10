@@ -46,6 +46,10 @@ Do not target a wireless shade; Home Assistant will reject the action.
 
 Communication is local between Home Assistant and the TRO.Y controller. This repository contains no household-specific controller addresses, shade names, or node IDs.
 
+## Brand artwork
+
+The integration icon is original project artwork and is not an official Screen Innovations logo.
+
 ## Support
 
 Use GitHub Issues for reproducible bugs and feature requests. Include the Home Assistant version, integration version, a concise description, and redacted relevant logs.
