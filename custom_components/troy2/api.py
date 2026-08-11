@@ -233,11 +233,8 @@ class Troy2Api:
         async with self._context.lock:
             address = self._wired_address()
 
-            # Keep both packets together so a position poll cannot consume the
-            # asynchronous SDN response between the query and SET command.
-            await self._async_wired_request(
-                f"120C00010000{address}010000"
-            )
+            # Change rolling speeds only. Motor direction is an independent
+            # persistent setting and must remain untouched.
             await self._async_wired_request(
                 f"130E00010000{address}"
                 f"{up_speed:02X}{down_speed:02X}{slow_speed:02X}0000"
