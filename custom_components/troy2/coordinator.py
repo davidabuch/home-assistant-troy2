@@ -9,7 +9,7 @@ import logging
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import Troy2Api, Troy2Error
+from .api import Troy2Api, Troy2Error, Troy2TransientPositionError
 from .const import (
     DEFAULT_SCAN_INTERVAL_SECONDS,
     DOMAIN,
@@ -44,11 +44,23 @@ class Troy2Coordinator(DataUpdateCoordinator[int]):
             position = await self.api.async_get_position()
             self._consecutive_update_failures = 0
             return position
+        except Troy2TransientPositionError as err:
+            # TRO.Y occasionally reports a successful request with no position
+            # data ("file empty"). This is a controller timing condition rather
+            # than evidence that the shade or controller is unavailable.
+            if self.data is not None:
+                _LOGGER.debug(
+                    "Preserving last known position for %s after transient "
+                    "TRO.Y position miss: %s",
+                    self.api.shade.label,
+                    err,
+                )
+                return self.data
+            raise UpdateFailed(str(err)) from err
         except Troy2Error as err:
             self._consecutive_update_failures += 1
-            # TRO.Y intermittently returns an empty SDN slot or times out while
-            # processing adjacent commands. Keep the entity stable for three
-            # missed polls, but still expose a sustained controller outage.
+            # Preserve the previous state briefly for genuine communication
+            # failures, but still expose a sustained controller outage.
             if self.data is not None and self._consecutive_update_failures <= 3:
                 _LOGGER.debug(
                     "Preserving last known position for %s after missed poll "

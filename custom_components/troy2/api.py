@@ -250,6 +250,12 @@ class Troy2Api:
             "str2": "LEVEL_RD",
         }
         data = await self._async_request(params)
+
+        if data.get("msg") == "file empty":
+            raise Troy2TransientPositionError(
+                f"TRO.Y position temporarily unavailable for {self._shade.label}"
+            )
+
         try:
             value = int(data["ATTR"]["attrValue"])
         except (KeyError, TypeError, ValueError) as err:
