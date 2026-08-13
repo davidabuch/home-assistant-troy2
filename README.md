@@ -106,7 +106,24 @@ Until this repository is accepted into a default HACS catalog:
 4. Restart Home Assistant.
 5. Go to **Settings → Devices & services → Add integration**.
 6. Search for **Troy** and select **Screen Innovations TRO.Y 2 (Troy)**.
-7. Enter the TRO.Y controller information requested by the setup flow.
+7. Enter the TRO.Y controller IP address and the requested shade information as explained below.
+
+### Important: the first-time shade prompt is only a discovery starting point
+
+The current setup screen asks for a **Shade Node ID** and **Shade Name** even though the integration will ultimately discover all shades connected to the TRO.Y controller. This is a temporary setup-flow limitation and can be confusing on first installation.
+
+For this initial prompt:
+
+1. Pick **any one shade already configured in TRO.Y**.
+2. Enter that shade's **Node ID exactly as it appears in TRO.Y**.
+3. Enter the **name of that same shade** in the Shade Name field.
+4. Submit the setup form.
+
+You do **not** need to repeat setup for every shade. Once the initial shade is accepted, the integration queries the TRO.Y controller and automatically discovers the rest of the shades it reports.
+
+In other words, the first shade is simply the starting point used to establish the integration; it is not the only shade Home Assistant will import.
+
+A future release should simplify this setup flow so users only need to identify the TRO.Y controller and do not have to provide an arbitrary first shade.
 
 ## Manual installation
 
@@ -122,7 +139,7 @@ into:
 /config/custom_components/troy2
 ```
 
-Restart Home Assistant, then add **Screen Innovations TRO.Y 2 (Troy)** from **Settings → Devices & services**.
+Restart Home Assistant, then add **Screen Innovations TRO.Y 2 (Troy)** from **Settings → Devices & services** and follow the first-time shade instructions above.
 
 ## Wired shade speed action
 
