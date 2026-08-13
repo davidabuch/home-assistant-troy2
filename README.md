@@ -1,54 +1,138 @@
 # Screen Innovations TRO.Y 2 (Troy) for Home Assistant
 
-**Direct local control of Screen Innovations TRO.Y shades from Home Assistant — no Bond Bridge Pro required.**
+**Direct local control of Screen Innovations TRO.Y shades from Home Assistant — no Bond Bridge Pro required for this integration.**
 
-This integration connects Home Assistant directly to the TRO.Y controller at its local IP address. It does not require a Bond Bridge Pro or another control bridge between Home Assistant and TRO.Y.
+This custom integration connects Home Assistant directly to a Screen Innovations TRO.Y controller on your local network. TRO.Y remains the controller and source of truth, while Home Assistant provides native cover entities, automation support, percentage positioning, state reconciliation, and wired-motor speed controls.
 
-Because Home Assistant polls TRO.Y directly for shade position, the TRO.Y controller remains the source of truth. This allows Home Assistant to reconcile shade state after a shade is operated by another TRO.Y-connected control, rather than relying only on commands previously sent by Home Assistant.
+Because Home Assistant reads shade position from TRO.Y, the integration can reconcile state after a shade is moved by another TRO.Y-connected control instead of relying only on commands previously sent by Home Assistant.
 
 > [!IMPORTANT]
 > This is an independent community project. It is not affiliated with or endorsed by Screen Innovations, Bond, or Home Assistant.
 
-## Why use this integration?
+## Why this integration exists
+
+If you already have TRO.Y, Home Assistant can talk to it directly. That means you can avoid adding another bridge solely to expose TRO.Y-controlled shades to Home Assistant.
+
+The architecture is intentionally simple:
+
+```text
+Home Assistant
+      |
+      | local network
+      v
+    TRO.Y 2
+   /   |   \
+RS485 Zigbee RTS*
+ shades shades shades
+```
+
+Instead of treating Home Assistant as the only source of state, this integration periodically asks TRO.Y for the shade position. That matters when shades are operated from remotes, wall controls, TRO.Y itself, or other systems connected to the controller.
+
+## Highlights
 
 - **Direct TRO.Y connection** — communicates with the TRO.Y controller over your local network.
-- **No Bond Bridge Pro required** — Home Assistant talks directly to TRO.Y without requiring an additional bridge for this integration.
-- **Controller-sourced state** — Home Assistant polls TRO.Y for shade position so state can be reconciled when shades are operated elsewhere.
+- **No additional bridge required** — Home Assistant talks directly to TRO.Y for this integration.
+- **Controller-sourced state** — Home Assistant reconciles shade position from TRO.Y rather than simply assuming the last command succeeded.
 - **Local control** — normal shade control does not depend on a cloud service.
-- **Position control** — supports open, close, stop, and percentage positioning.
-- **Wired-motor speed control** — supports persistent up, down, and slow speed settings for compatible wired shades.
-- **Automatic shade discovery** — shades returned by the TRO.Y controller are discovered after setup.
+- **Automatic shade discovery** — all shades returned by the TRO.Y controller are discovered after setup.
+- **Native Home Assistant covers** — open, close, stop, and percentage positioning.
+- **Fast movement tracking** — position polling accelerates while a Home Assistant-commanded movement is active.
+- **Low-overhead idle polling** — idle shade state is reconciled every 20 seconds to reduce unnecessary controller traffic.
+- **Transient-response resilience** — temporary TRO.Y position responses such as `file empty` are handled without unnecessarily dropping an otherwise healthy shade.
+- **Wired-motor speed control** — compatible RS485 shades can store independent up, down, and slow speed settings.
+- **Direction-safe speed updates** — changing wired motor speeds does not modify the motor's persistent direction setting.
+
+## Why controller-sourced state matters
+
+A shade system is often controlled from more than one place. Home Assistant may issue one command, while another command later comes from a wall station, handheld remote, TRO.Y interface, or another integration.
+
+This integration periodically reconciles with TRO.Y so Home Assistant can follow the state reported by the controller. That makes automations, dashboards, and HomeKit exposure much more useful than an architecture that only remembers what Home Assistant last asked the shade to do.
+
+## Supported functionality
+
+| Capability | Status |
+| --- | --- |
+| Local TRO.Y connection | Supported |
+| Automatic shade discovery | Supported |
+| Open / close / stop | Supported |
+| Percentage positioning | Supported |
+| Controller-reported position reconciliation | Supported where TRO.Y reports position |
+| Faster polling during movement | Supported |
+| Wired RS485 motor speed settings | Supported |
+| Home Assistant automations and scripts | Supported |
+| HomeKit exposure through Home Assistant | Supported through Home Assistant's HomeKit Bridge |
 
 ## Shade compatibility
 
-- **RS485 / wired shades — tested.** Direct control, position feedback, and supported wired-motor speed settings have been field-tested.
-- **Zigbee shades — tested.** Two-way shade control and position/state feedback through TRO.Y have been field-tested.
-- **RTS shades — expected to support basic control, but not yet formally tested.** RTS is a one-way RF technology, so position feedback and state synchronization may differ from wired RS485 and Zigbee shades. Users with TRO.Y-connected RTS shades are encouraged to report their results through GitHub Issues.
+### RS485 / wired shades
 
-## Current status
+**Tested.** Direct control, percentage positioning, position feedback, and supported wired-motor speed settings have been field-tested.
 
-Version 0.3.12 is the current HACS-submission candidate. It preserves the field-tested runtime behavior while documenting shade-technology compatibility. The integration supports local shade discovery, position polling where reported by TRO.Y, open/close/stop/position commands, wired-motor speed control, serialized controller traffic, faster polling while a shade is moving, and resilient startup discovery.
+### Zigbee shades
 
-The integration currently uses a legacy-compatible setup flow that asks for the controller IP address, one wired shade node ID, and a friendly name. After setup, all shades returned by that controller are discovered. A controller-first setup flow is planned for v0.4.0.
+**Tested.** Two-way shade control and position/state feedback through TRO.Y have been field-tested.
+
+### RTS shades
+
+**Basic control is expected, but RTS has not yet been formally field-tested with this integration.** RTS is a one-way RF technology, so position feedback and synchronization may differ from RS485 and Zigbee shades. Users with TRO.Y-connected RTS shades are encouraged to report results through GitHub Issues.
+
+## Current release
+
+**Version 0.3.14** is the current production release on `main`.
+
+The current implementation includes:
+
+- direct local TRO.Y communication
+- automatic controller-wide shade discovery
+- open, close, stop, and position commands
+- controller-sourced position polling
+- 20-second idle reconciliation
+- 1-second movement polling while a commanded movement is active
+- serialized controller traffic
+- resilient startup discovery
+- transient position-response handling
+- wired Up / Down / Slow motor speed configuration
+- direction-safe wired speed updates
+
+The setup flow currently asks for the TRO.Y controller IP address, one shade node ID, and a friendly name. After setup, the integration discovers all shades returned by that controller.
 
 ## Installation with HACS
 
 Until this repository is accepted into a default HACS catalog:
 
-1. Open HACS in Home Assistant.
+1. Open **HACS** in Home Assistant.
 2. Add this repository as a custom repository with category **Integration**.
 3. Search for **Troy** and install **Screen Innovations TRO.Y 2 (Troy)**.
 4. Restart Home Assistant.
 5. Go to **Settings → Devices & services → Add integration**.
 6. Search for **Troy** and select **Screen Innovations TRO.Y 2 (Troy)**.
+7. Enter the TRO.Y controller information requested by the setup flow.
 
 ## Manual installation
 
-Copy `custom_components/troy2` into `/config/custom_components/troy2`, restart Home Assistant, and add the integration from **Settings → Devices & services**.
+Copy:
+
+```text
+custom_components/troy2
+```
+
+into:
+
+```text
+/config/custom_components/troy2
+```
+
+Restart Home Assistant, then add **Screen Innovations TRO.Y 2 (Troy)** from **Settings → Devices & services**.
 
 ## Wired shade speed action
 
-The `troy2.set_wired_speeds` action sets the up, down, and slow speed values for a wired shade. All three values are required and must be between 10 and 25.
+The `troy2.set_wired_speeds` action sets the three persistent rolling-speed values stored by a compatible wired motor:
+
+- Up speed
+- Down speed
+- Slow speed
+
+All three values are required and must be between **10 and 25**.
 
 ```yaml
 action: troy2.set_wired_speeds
@@ -60,19 +144,48 @@ data:
   slow_speed: 15
 ```
 
+Speed updates are sent independently of motor direction, so an existing Standard or Reversed motor orientation is preserved.
+
 Do not target a wireless shade; Home Assistant will reject the action.
+
+## HomeKit and voice assistants
+
+Because the shades are exposed as normal Home Assistant `cover` entities, they can participate in the rest of the Home Assistant ecosystem, including dashboards, scripts, automations, scenes, and Home Assistant's HomeKit Bridge.
+
+This repository does not implement a separate HomeKit or voice-assistant protocol. Those capabilities are provided by Home Assistant itself.
+
+## Reliability design
+
+TRO.Y occasionally returns temporary position responses without usable shade data. The integration treats known transient position conditions separately from true controller failures so a brief controller timing condition does not unnecessarily mark a healthy shade unavailable.
+
+Idle polling is intentionally slower than active movement polling:
+
+- **Idle:** every 20 seconds
+- **During Home Assistant-commanded movement:** every 1 second
+
+This keeps state reasonably fresh while avoiding constant unnecessary traffic to the controller.
 
 ## Privacy
 
-Communication is local between Home Assistant and the TRO.Y controller. This repository contains no household-specific controller addresses, shade names, or node IDs.
+Communication is local between Home Assistant and the TRO.Y controller during normal shade operation. This repository contains no household-specific controller addresses, shade names, credentials, or node IDs.
+
+## Project status and contributions
+
+This integration was developed against real TRO.Y hardware and is actively field-tested with RS485 and Zigbee shades.
+
+Bug reports, compatibility reports, and reproducible protocol findings are welcome. If you have TRO.Y-connected RTS shades or a shade configuration not represented above, your test results can help improve compatibility for everyone.
+
+When opening an issue, please include:
+
+- Home Assistant version
+- TRO.Y integration version
+- shade technology if known: RS485, Zigbee, or RTS
+- concise reproduction steps
+- redacted relevant logs
 
 ## Brand artwork
 
 The integration icon is original project artwork and is not an official Screen Innovations logo.
-
-## Support
-
-Use GitHub Issues for reproducible bugs and feature requests. Include the Home Assistant version, integration version, a concise description, and redacted relevant logs.
 
 ## License
 
