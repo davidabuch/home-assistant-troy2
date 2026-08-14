@@ -18,6 +18,7 @@ CONF_SHADE_NAME = "shade_name"
 DEFAULT_NAME = "TRO.Y Shade"
 DEFAULT_NODE_ID = "0000"
 DEFAULT_SCAN_INTERVAL_SECONDS = 20
+COMMUNICATION_FAILURE_GRACE_SECONDS = 60
 
 # Poll much faster after a movement command so Home Assistant and HomeKit
 # follow the physical shade without permanently hammering the TRO.Y controller.

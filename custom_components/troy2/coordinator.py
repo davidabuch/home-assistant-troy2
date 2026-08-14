@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
 import logging
+from datetime import timedelta
+from time import monotonic
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import Troy2Api, Troy2Error, Troy2TransientPositionError
 from .const import (
+    COMMUNICATION_FAILURE_GRACE_SECONDS,
     DEFAULT_SCAN_INTERVAL_SECONDS,
     DOMAIN,
     MOVEMENT_MINIMUM_POLL_SECONDS,
@@ -37,40 +39,53 @@ class Troy2Coordinator(DataUpdateCoordinator[int]):
         self.movement_direction: str | None = None
         self._movement_task: asyncio.Task[None] | None = None
         self._movement_generation = 0
-        self._consecutive_update_failures = 0
+        self._last_success_monotonic: float | None = None
 
     async def _async_update_data(self) -> int:
         try:
             position = await self.api.async_get_position()
-            self._consecutive_update_failures = 0
+            self._last_success_monotonic = monotonic()
             return position
         except Troy2TransientPositionError as err:
-            # TRO.Y occasionally reports a successful request with no position
-            # data ("file empty"). This is a controller timing condition rather
-            # than evidence that the shade or controller is unavailable.
-            if self.data is not None:
+            # Known TRO.Y timing responses are not evidence of an immediate
+            # outage. Preserve a recently established position, but still let
+            # a sustained loss of usable position data become a real failure.
+            if self.data is not None and self._within_failure_grace():
+                age = self._seconds_since_success()
                 _LOGGER.debug(
                     "Preserving last known position for %s after transient "
-                    "TRO.Y position miss: %s",
+                    "TRO.Y position miss %.1fs after the last successful update: %s",
                     self.api.shade.label,
+                    age,
                     err,
                 )
                 return self.data
             raise UpdateFailed(str(err)) from err
         except Troy2Error as err:
-            self._consecutive_update_failures += 1
-            # Preserve the previous state briefly for genuine communication
-            # failures, but still expose a sustained controller outage.
-            if self.data is not None and self._consecutive_update_failures <= 3:
+            # Poll frequency changes from 20 seconds idle to 1 second during
+            # movement, so failure counts do not represent a consistent outage
+            # duration. Use elapsed time since the last successful update.
+            if self.data is not None and self._within_failure_grace():
+                age = self._seconds_since_success()
                 _LOGGER.debug(
-                    "Preserving last known position for %s after missed poll "
-                    "(%s/3): %s",
+                    "Preserving last known position for %s after TRO.Y "
+                    "communication miss %.1fs after the last successful update: %s",
                     self.api.shade.label,
-                    self._consecutive_update_failures,
+                    age,
                     err,
                 )
                 return self.data
             raise UpdateFailed(str(err)) from err
+
+    def _seconds_since_success(self) -> float:
+        """Return seconds since the last successful position update."""
+        if self._last_success_monotonic is None:
+            return float("inf")
+        return max(0.0, monotonic() - self._last_success_monotonic)
+
+    def _within_failure_grace(self) -> bool:
+        """Keep a known shade available through brief communication misses."""
+        return self._seconds_since_success() < COMMUNICATION_FAILURE_GRACE_SECONDS
 
     def start_movement_polling(
         self,
