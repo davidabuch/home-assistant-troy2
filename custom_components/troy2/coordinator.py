@@ -47,19 +47,24 @@ class Troy2Coordinator(DataUpdateCoordinator[int]):
             self._last_success_monotonic = monotonic()
             return position
         except Troy2TransientPositionError as err:
-            # Known TRO.Y timing responses are not evidence of an outage. Once
-            # a valid position has been established, preserve it and let the
-            # next scheduled/rapid poll reconcile state normally.
-            if self.data is not None:
+            # Known TRO.Y timing responses are not evidence of an immediate
+            # outage. Preserve a recently established position, but still let
+            # a sustained loss of usable position data become a real failure.
+            if self.data is not None and self._within_failure_grace():
+                age = self._seconds_since_success()
                 _LOGGER.debug(
                     "Preserving last known position for %s after transient "
-                    "TRO.Y position miss: %s",
+                    "TRO.Y position miss %.1fs after the last successful update: %s",
                     self.api.shade.label,
+                    age,
                     err,
                 )
                 return self.data
             raise UpdateFailed(str(err)) from err
         except Troy2Error as err:
+            # Poll frequency changes from 20 seconds idle to 1 second during
+            # movement, so failure counts do not represent a consistent outage
+            # duration. Use elapsed time since the last successful update.
             if self.data is not None and self._within_failure_grace():
                 age = self._seconds_since_success()
                 _LOGGER.debug(
