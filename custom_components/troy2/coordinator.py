@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
 import logging
+from datetime import timedelta
 from time import monotonic
 
 from homeassistant.core import HomeAssistant
