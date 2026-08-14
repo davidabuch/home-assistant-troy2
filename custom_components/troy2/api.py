@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from time import monotonic
-from typing import Any
+from typing import Any, TypeVar
 
 from aiohttp import ClientError, ClientSession
+
+_T = TypeVar("_T")
 
 
 class Troy2Error(Exception):
     """Base TRO.Y 2 communication error."""
+
+
+class Troy2ConnectionError(Troy2Error):
+    """The TRO.Y controller could not be reached."""
+
+
+class Troy2DiscoveryError(Troy2Error):
+    """The controller answered, but its discovery data was unusable."""
 
 
 class Troy2TransientPositionError(Troy2Error):
@@ -53,7 +64,7 @@ class Troy2HubApi:
 
     def __init__(self, session: ClientSession, host: str) -> None:
         self._session = session
-        self._host = _normalize_host(host)
+        self._host = normalize_host(host)
         self._url = f"http://{self._host}/troy.cgi"
 
     @property
@@ -64,44 +75,67 @@ class Troy2HubApi:
         """Discover all user-created motor records."""
         index_data = await self._async_request({"cmd": "32"})
         indexes = index_data.get("indexes")
-        max_user = index_data.get("maxUser", 480)
         if not isinstance(indexes, list):
-            raise Troy2Error(f"Unexpected device index response: {index_data}")
+            raise Troy2DiscoveryError(
+                f"Unexpected device index response: {index_data}"
+            )
+        try:
+            max_user = int(index_data.get("maxUser", 480))
+        except (TypeError, ValueError) as err:
+            raise Troy2DiscoveryError(
+                f"Invalid maximum user index: {index_data}"
+            ) from err
 
-        shades: list[Troy2ShadeDescription] = []
+        shades: dict[str, Troy2ShadeDescription] = {}
+        record_errors: list[Troy2Error] = []
         for raw_index in indexes:
             try:
                 index = int(raw_index)
             except (TypeError, ValueError):
                 continue
-            if index > int(max_user):
+            if index > max_user:
                 continue
 
-            record = await self._async_request(
-                {"cmd": "2", "int1": str(index)}
-            )
+            try:
+                record = await self._async_request(
+                    {"cmd": "2", "int1": str(index)}
+                )
+            except Troy2Error as err:
+                # One malformed/offline device must not prevent other shades
+                # on the same controller from being set up.
+                record_errors.append(err)
+                continue
             if record.get("type") != 1 or record.get("deviceFunction") != "motor":
                 continue
 
             native_id = str(record.get("nativeID", "")).strip().upper()
-            if not native_id:
+            if not native_id or native_id in shades:
                 continue
             wired = len(native_id) == 6
             node_id = None
             if not wired:
-                node_id = await self.async_lookup_node(native_id)
+                try:
+                    node_id = await self.async_lookup_node(native_id)
+                except Troy2Error:
+                    # The permanent native ID is enough to preserve entity
+                    # identity. Runtime polling can resolve a sleeping or
+                    # rejoined Zigbee shade later.
+                    node_id = None
 
-            shades.append(
-                Troy2ShadeDescription(
-                    vadr_entry=index,
-                    label=str(record.get("label") or f"TRO.Y Shade {index}"),
-                    native_id=native_id,
-                    assigned_id=str(record.get("assignedID", "")),
-                    wired=wired,
-                    node_id=node_id,
-                )
+            shades[native_id] = Troy2ShadeDescription(
+                vadr_entry=index,
+                label=str(record.get("label") or f"TRO.Y Shade {index}"),
+                native_id=native_id,
+                assigned_id=str(record.get("assignedID", "")),
+                wired=wired,
+                node_id=node_id,
             )
-        return shades
+
+        if shades:
+            return list(shades.values())
+        if record_errors:
+            raise record_errors[-1]
+        return []
 
     async def async_lookup_node(self, native_id: str) -> str:
         """Translate a permanent wireless IEEE ID into its current NWK ID."""
@@ -128,7 +162,7 @@ class Troy2Api:
         context: Troy2ControllerContext,
     ) -> None:
         self._session = session
-        self._host = _normalize_host(host)
+        self._host = normalize_host(host)
         self._shade = shade
         self._context = context
         self._node_id = shade.node_id
@@ -158,7 +192,9 @@ class Troy2Api:
                 if self._shade.wired:
                     troy_position = await self._async_get_wired_position()
                 else:
-                    troy_position = await self._async_get_wireless_position()
+                    troy_position = await self._async_retry_wireless(
+                        self._async_get_wireless_position
+                    )
                 break
         return 100 - troy_position
 
@@ -167,7 +203,9 @@ class Troy2Api:
             if self._shade.wired:
                 await self._async_wired_command("UP")
             else:
-                await self._async_wireless_command("UP")
+                await self._async_retry_wireless(
+                    lambda: self._async_wireless_command("UP")
+                )
             self._context.defer_position_polls()
 
     async def async_close(self) -> None:
@@ -175,7 +213,9 @@ class Troy2Api:
             if self._shade.wired:
                 await self._async_wired_command("DOWN")
             else:
-                await self._async_wireless_command("DOWN")
+                await self._async_retry_wireless(
+                    lambda: self._async_wireless_command("DOWN")
+                )
             self._context.defer_position_polls()
 
     async def async_stop(self) -> None:
@@ -183,7 +223,9 @@ class Troy2Api:
             if self._shade.wired:
                 await self._async_wired_command("STOP")
             else:
-                await self._async_wireless_command("STOP")
+                await self._async_retry_wireless(
+                    lambda: self._async_wireless_command("STOP")
+                )
             self._context.defer_position_polls()
 
     async def async_set_position(self, position: int) -> None:
@@ -201,16 +243,9 @@ class Troy2Api:
                 else:
                     await self._async_set_wired_position(troy_position)
             else:
-                params = {
-                    "cmd": "71",
-                    "int1": "18",
-                    "str1": self._wireless_node(),
-                    "str2": "GOTO",
-                    "str3": str(troy_position),
-                }
-                data = await self._async_request(params)
-                if data.get("result") is not True:
-                    raise Troy2Error(f"TRO.Y rejected GOTO command: {data}")
+                await self._async_retry_wireless(
+                    lambda: self._async_set_wireless_position(troy_position)
+                )
             self._context.defer_position_polls()
 
     async def async_set_wired_speeds(
@@ -261,6 +296,46 @@ class Troy2Api:
         except (KeyError, TypeError, ValueError) as err:
             raise Troy2Error(f"Unexpected position response: {data}") from err
         return max(0, min(100, value))
+
+    async def _async_set_wireless_position(self, troy_position: int) -> None:
+        """Set a wireless position using its current NWK address."""
+        params = {
+            "cmd": "71",
+            "int1": "18",
+            "str1": self._wireless_node(),
+            "str2": "GOTO",
+            "str3": str(troy_position),
+        }
+        data = await self._async_request(params)
+        if data.get("result") is not True:
+            raise Troy2Error(f"TRO.Y rejected GOTO command: {data}")
+
+    async def _async_retry_wireless(
+        self,
+        operation: Callable[[], Awaitable[_T]],
+    ) -> _T:
+        """Retry once after resolving a wireless shade's current NWK ID."""
+        try:
+            return await operation()
+        except Troy2Error as original_error:
+            try:
+                data = await self._async_request(
+                    {
+                        "cmd": "71",
+                        "int1": "31",
+                        "str1": self._shade.native_id,
+                    }
+                )
+                node = data.get("node")
+                if not isinstance(node, str) or not node:
+                    raise Troy2Error(
+                        "Unable to re-resolve wireless node for "
+                        f"{self._shade.native_id}: {data}"
+                    )
+                self._node_id = node.upper().removeprefix("0X")
+            except Troy2Error as resolution_error:
+                raise original_error from resolution_error
+            return await operation()
 
     async def _async_get_wired_position(self) -> int:
         """Read the motor's live physical position."""
@@ -373,8 +448,15 @@ class Troy2Api:
         return await _async_request(self._session, self._url, self._host, params)
 
 
-def _normalize_host(host: str) -> str:
-    return host.strip().removeprefix("http://").removeprefix("https://").rstrip("/")
+def normalize_host(host: str) -> str:
+    """Normalize a user-supplied controller host for identity and URLs."""
+    normalized = host.strip().rstrip("/")
+    lowered = normalized.lower()
+    for prefix in ("http://", "https://"):
+        if lowered.startswith(prefix):
+            normalized = normalized[len(prefix) :]
+            break
+    return normalized.rstrip("/").lower()
 
 
 async def _async_request(
@@ -387,8 +469,21 @@ async def _async_request(
         async with session.get(url, params=params, timeout=10) as response:
             response.raise_for_status()
             data = await response.json(content_type=None)
-    except (ClientError, TimeoutError, ValueError) as err:
-        raise Troy2Error(f"Unable to communicate with TRO.Y 2 at {host}: {err}") from err
+    except (ClientError, TimeoutError) as err:
+        raise Troy2ConnectionError(
+            f"Unable to communicate with TRO.Y 2 at {host}: {err}"
+        ) from err
+    except ValueError as err:
+        raise Troy2Error(f"Invalid JSON response from TRO.Y 2 at {host}: {err}") from err
+    except RuntimeError as err:
+        # aiohttp raises RuntimeError("Session is closed") during an orderly
+        # Home Assistant shutdown. Normalize only that known session state;
+        # unrelated RuntimeError programming faults must remain visible.
+        if getattr(session, "closed", False) or str(err) == "Session is closed":
+            raise Troy2ConnectionError(
+                f"Unable to communicate with TRO.Y 2 at {host}: session closed"
+            ) from err
+        raise
     if not isinstance(data, dict):
         raise Troy2Error(f"Unexpected response type: {type(data).__name__}")
     return data

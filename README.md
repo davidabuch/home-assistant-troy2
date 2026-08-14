@@ -76,9 +76,9 @@ This integration periodically reconciles with TRO.Y so Home Assistant can follow
 
 **Basic control is expected, but RTS has not yet been formally field-tested with this integration.** RTS is a one-way RF technology, so position feedback and synchronization may differ from RS485 and Zigbee shades. Users with TRO.Y-connected RTS shades are encouraged to report results through GitHub Issues.
 
-## Current release
+## Target release
 
-**Version 0.3.14** is the current production release on `main`.
+**Version 0.3.16** introduces controller-only setup and reliability hardening.
 
 The current implementation includes:
 
@@ -93,8 +93,12 @@ The current implementation includes:
 - transient position-response handling
 - wired Up / Down / Slow motor speed configuration
 - direction-safe wired speed updates
+- controller-only setup with automatic shade discovery
+- collision-safe migration from v1 seed-shade entries
+- automatic Zigbee node-address re-resolution after a rejoin
+- privacy-redacted Home Assistant diagnostics
 
-The setup flow currently asks for the TRO.Y controller IP address, one shade node ID, and a friendly name. After setup, the integration discovers all shades returned by that controller.
+Setup asks only for the TRO.Y controller IP address or hostname. The integration validates the controller and automatically discovers all shades it reports. Because the existing TRO.Y responses used by this integration do not expose a reliable controller serial number or permanent ID, the normalized controller address is used as the config-entry identity. A DHCP reservation or static IP is recommended.
 
 ## Installation with HACS
 
@@ -106,24 +110,7 @@ Until this repository is accepted into a default HACS catalog:
 4. Restart Home Assistant.
 5. Go to **Settings → Devices & services → Add integration**.
 6. Search for **Troy** and select **Screen Innovations TRO.Y 2 (Troy)**.
-7. Enter the TRO.Y controller IP address and the requested shade information as explained below.
-
-### Important: the first-time shade prompt is only a discovery starting point
-
-The current setup screen asks for a **Shade Node ID** and **Shade Name** even though the integration will ultimately discover all shades connected to the TRO.Y controller. This is a temporary setup-flow limitation and can be confusing on first installation.
-
-For this initial prompt:
-
-1. Pick **any one shade already configured in TRO.Y**.
-2. Enter that shade's **Node ID exactly as it appears in TRO.Y**.
-3. Enter the **name of that same shade** in the Shade Name field.
-4. Submit the setup form.
-
-You do **not** need to repeat setup for every shade. Once the initial shade is accepted, the integration queries the TRO.Y controller and automatically discovers the rest of the shades it reports.
-
-In other words, the first shade is simply the starting point used to establish the integration; it is not the only shade Home Assistant will import.
-
-A future release should simplify this setup flow so users only need to identify the TRO.Y controller and do not have to provide an arbitrary first shade.
+7. Enter the TRO.Y controller IP address or hostname. Home Assistant discovers and adds all reported shades automatically under **TRO.Y 2 Shade Controller**.
 
 ## Manual installation
 
@@ -139,7 +126,7 @@ into:
 /config/custom_components/troy2
 ```
 
-Restart Home Assistant, then add **Screen Innovations TRO.Y 2 (Troy)** from **Settings → Devices & services** and follow the first-time shade instructions above.
+Restart Home Assistant, then add **Screen Innovations TRO.Y 2 (Troy)** from **Settings → Devices & services** and enter the controller IP address or hostname.
 
 ## Wired shade speed action
 
@@ -175,12 +162,18 @@ This repository does not implement a separate HomeKit or voice-assistant protoco
 
 TRO.Y occasionally returns temporary position responses without usable shade data. The integration treats known transient position conditions separately from true controller failures so a brief controller timing condition does not unnecessarily mark a healthy shade unavailable.
 
+Established shades retain their last known position and remain available for communication misses shorter than 60 seconds. A sustained outage becomes a normal Home Assistant update failure and marks the affected shade unavailable; a later successful poll restores it cleanly.
+
+All discovery, polling, and command traffic remains sequential. Every shade on one controller shares a single asynchronous lock, including rapid movement tracking, so requests cannot interleave on TRO.Y. Wireless shades retain identity from their permanent native identifier and retry once with a freshly resolved Zigbee network address when the cached address stops responding.
+
 Idle polling is intentionally slower than active movement polling:
 
 - **Idle:** every 20 seconds
 - **During Home Assistant-commanded movement:** every 1 second
 
 This keeps state reasonably fresh while avoiding constant unnecessary traffic to the controller.
+
+Home Assistant diagnostics report integration version, aggregate controller health, shade count, wired/wireless technology, and coordinator health. Controller addresses, shade names, node addresses, and permanent native identifiers are omitted.
 
 ## Privacy
 

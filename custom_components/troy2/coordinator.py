@@ -87,6 +87,13 @@ class Troy2Coordinator(DataUpdateCoordinator[int]):
         """Keep a known shade available through brief communication misses."""
         return self._seconds_since_success() < COMMUNICATION_FAILURE_GRACE_SECONDS
 
+    @property
+    def seconds_since_success(self) -> float | None:
+        """Return the last-success age for privacy-safe diagnostics."""
+        if self._last_success_monotonic is None:
+            return None
+        return self._seconds_since_success()
+
     def start_movement_polling(
         self,
         *,

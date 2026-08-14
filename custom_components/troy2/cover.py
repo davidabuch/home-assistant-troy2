@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from homeassistant.components.cover import ATTR_POSITION, CoverEntity, CoverEntityFeature
+from homeassistant.components.cover import (
+    ATTR_POSITION,
+    CoverEntity,
+    CoverEntityFeature,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -34,7 +38,9 @@ class Troy2Shade(CoordinatorEntity[Troy2Coordinator], CoverEntity):
     )
     _attr_has_entity_name = True
     _attr_name = None
-    _attr_entity_registry_enabled_default = False
+    # Home Assistant applies this only when a registry entry is first created;
+    # existing users' explicit enabled/disabled choices remain untouched.
+    _attr_entity_registry_enabled_default = True
 
     def __init__(self, coordinator: Troy2Coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
