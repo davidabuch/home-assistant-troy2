@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 
 import voluptuous as vol
-
 from homeassistant.components.cover import DOMAIN as COVER_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import config_validation as cv, service
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import service
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
 
@@ -21,6 +21,7 @@ from .api import (
     Troy2Error,
     Troy2HubApi,
     Troy2ShadeDescription,
+    normalize_host,
 )
 from .const import (
     ATTR_DOWN_SPEED,
@@ -28,6 +29,7 @@ from .const import (
     ATTR_UP_SPEED,
     CONF_NODE_ID,
     CONF_SHADE_NAME,
+    CONTROLLER_TITLE,
     DOMAIN,
     MAX_WIRED_SPEED,
     MIN_WIRED_SPEED,
@@ -39,6 +41,42 @@ from .coordinator import Troy2Coordinator
 SETUP_DISCOVERY_SCAN_DELAY_SECONDS = 2
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate a seed-shade v1 entry to the controller-level v2 model."""
+    if entry.version != 1:
+        return True
+
+    host = normalize_host(str(entry.data[CONF_HOST]))
+    same_controller_entries = [
+        other
+        for other in hass.config_entries.async_entries(DOMAIN)
+        if normalize_host(str(other.data.get(CONF_HOST, ""))) == host
+    ]
+    controller_id_in_use = any(
+        other.entry_id != entry.entry_id and other.unique_id == host
+        for other in hass.config_entries.async_entries(DOMAIN)
+    )
+
+    # Historical entries were unique by host + arbitrary seed node. Convert a
+    # lone entry to the controller identity, but preserve every legacy unique
+    # ID when one controller was configured more than once. Entries are never
+    # silently merged or deleted, so no entity registry ownership is lost.
+    unique_id = entry.unique_id
+    if len(same_controller_entries) == 1 and not controller_id_in_use:
+        unique_id = host
+
+    data = dict(entry.data)
+    data[CONF_HOST] = host
+    hass.config_entries.async_update_entry(
+        entry,
+        data=data,
+        title=CONTROLLER_TITLE,
+        unique_id=unique_id,
+        version=2,
+    )
+    return True
 
 
 async def _async_discover_shades(

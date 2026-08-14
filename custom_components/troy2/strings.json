@@ -3,25 +3,23 @@
   "config": {
     "step": {
       "user": {
-        "title": "Add a TRO.Y 2 shade",
-        "description": "Connect directly to one Screen Innovations shade through TRO.Y 2.",
+        "title": "Connect to a TRO.Y 2 controller",
+        "description": "Enter your TRO.Y 2 controller address. Home Assistant will validate the controller and discover its shades automatically.",
         "data": {
-          "host": "TRO.Y 2 IP address",
-          "node_id": "Shade node ID",
-          "shade_name": "Shade name"
+          "host": "Controller IP address or hostname"
         },
         "data_description": {
-          "host": "Enter only the IP address or hostname, without http://.",
-          "node_id": "Enter the wired shade node ID reported by your TRO.Y controller.",
-          "shade_name": "The name shown in Home Assistant and Apple Home."
+          "host": "Enter the local IP address or hostname. A DHCP reservation or static IP is recommended."
         }
       }
     },
     "error": {
-      "cannot_connect": "Could not read the shade position from TRO.Y 2. Check the IP address and node ID."
+      "cannot_connect": "Could not reach the TRO.Y 2 controller. Check the address and network connection.",
+      "discovery_failed": "The controller responded, but Home Assistant could not read its shade list. Try again in a moment.",
+      "no_shades": "The controller did not report any shades. Add a shade in TRO.Y 2, then try again."
     },
     "abort": {
-      "already_configured": "This TRO.Y 2 shade is already configured."
+      "already_configured": "This TRO.Y 2 controller is already configured."
     }
   },
   "services": {
