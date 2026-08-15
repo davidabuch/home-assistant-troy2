@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any, TypeVar
 
-from aiohttp import ClientError, ClientSession
+from aiohttp import ClientError, ClientResponseError, ClientSession
 
 _T = TypeVar("_T")
 
@@ -16,9 +17,36 @@ _T = TypeVar("_T")
 class Troy2Error(Exception):
     """Base TRO.Y 2 communication error."""
 
+    category = "protocol"
+    controller_relevant = False
+    shutdown = False
+
 
 class Troy2ConnectionError(Troy2Error):
     """The TRO.Y controller could not be reached."""
+
+    category = "connection"
+    controller_relevant = True
+
+
+class Troy2TimeoutError(Troy2ConnectionError):
+    """A TRO.Y request exceeded the proven HTTP timeout."""
+
+    category = "timeout"
+
+
+class Troy2HttpError(Troy2ConnectionError):
+    """TRO.Y returned an unsuccessful HTTP response."""
+
+    category = "http"
+
+
+class Troy2ShutdownError(Troy2ConnectionError):
+    """Home Assistant closed the shared session during shutdown."""
+
+    category = "shutdown"
+    controller_relevant = False
+    shutdown = True
 
 
 class Troy2DiscoveryError(Troy2Error):
@@ -28,6 +56,14 @@ class Troy2DiscoveryError(Troy2Error):
 class Troy2TransientPositionError(Troy2Error):
     """A temporary empty or incomplete position response."""
 
+    category = "transient_position"
+
+
+class Troy2NodeAddressError(Troy2Error):
+    """A wireless operation failed in a way consistent with a stale NWK ID."""
+
+    category = "node_address"
+
 
 class Troy2ControllerContext:
     """Coordinate all traffic sent to one TRO.Y controller."""
@@ -35,6 +71,29 @@ class Troy2ControllerContext:
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
         self.poll_not_before = 0.0
+        self.request_in_progress = False
+        self.total_successful_requests = 0
+        self.total_failed_requests = 0
+        self._recent_latencies: deque[float] = deque(maxlen=50)
+
+    def request_started(self) -> float:
+        """Record the start of one physical HTTP request."""
+        self.request_in_progress = True
+        return monotonic()
+
+    def request_finished(self, started: float, *, successful: bool) -> None:
+        """Record completion of one physical HTTP request."""
+        self.request_in_progress = False
+        self._recent_latencies.append(max(0.0, monotonic() - started))
+        if successful:
+            self.total_successful_requests += 1
+        else:
+            self.total_failed_requests += 1
+
+    @property
+    def recent_latencies(self) -> tuple[float, ...]:
+        """Return an immutable latency sample for diagnostics."""
+        return tuple(self._recent_latencies)
 
     def defer_position_polls(self, seconds: float = 2.0) -> None:
         """Keep background polling away from a just-issued command."""
@@ -62,10 +121,16 @@ class Troy2ShadeDescription:
 class Troy2HubApi:
     """Controller-level client used for discovery."""
 
-    def __init__(self, session: ClientSession, host: str) -> None:
+    def __init__(
+        self,
+        session: ClientSession,
+        host: str,
+        context: Troy2ControllerContext | None = None,
+    ) -> None:
         self._session = session
         self._host = normalize_host(host)
         self._url = f"http://{self._host}/troy.cgi"
+        self._context = context
 
     @property
     def host(self) -> str:
@@ -148,7 +213,16 @@ class Troy2HubApi:
         return node.upper().removeprefix("0X")
 
     async def _async_request(self, params: dict[str, str]) -> dict[str, Any]:
-        return await _async_request(self._session, self._url, self._host, params)
+        if self._context is None:
+            return await _async_request(self._session, self._url, self._host, params)
+        async with self._context.lock:
+            return await _async_request(
+                self._session,
+                self._url,
+                self._host,
+                params,
+                self._context,
+            )
 
 
 class Troy2Api:
@@ -182,20 +256,13 @@ class Troy2Api:
 
     async def async_get_position(self) -> int:
         """Return position using Home Assistant's 0-closed/100-open scale."""
-        while True:
-            await self._context.wait_until_poll_allowed()
-            async with self._context.lock:
-                # A command may have deferred polling while this poll was
-                # waiting for the lock. Recheck before touching TRO.Y.
-                if self._context.poll_not_before > monotonic():
-                    continue
-                if self._shade.wired:
-                    troy_position = await self._async_get_wired_position()
-                else:
-                    troy_position = await self._async_retry_wireless(
-                        self._async_get_wireless_position
-                    )
-                break
+        async with self._context.lock:
+            if self._shade.wired:
+                troy_position = await self._async_get_wired_position()
+            else:
+                troy_position = await self._async_retry_wireless(
+                    self._async_get_wireless_position
+                )
         return 100 - troy_position
 
     async def async_open(self) -> None:
@@ -290,6 +357,10 @@ class Troy2Api:
             raise Troy2TransientPositionError(
                 f"TRO.Y position temporarily unavailable for {self._shade.label}"
             )
+        if data.get("result") is False:
+            raise Troy2NodeAddressError(
+                f"TRO.Y rejected position request for {self._shade.label}"
+            )
 
         try:
             value = int(data["ATTR"]["attrValue"])
@@ -308,7 +379,7 @@ class Troy2Api:
         }
         data = await self._async_request(params)
         if data.get("result") is not True:
-            raise Troy2Error(f"TRO.Y rejected GOTO command: {data}")
+            raise Troy2NodeAddressError(f"TRO.Y rejected GOTO command: {data}")
 
     async def _async_retry_wireless(
         self,
@@ -317,7 +388,7 @@ class Troy2Api:
         """Retry once after resolving a wireless shade's current NWK ID."""
         try:
             return await operation()
-        except Troy2Error as original_error:
+        except Troy2NodeAddressError as original_error:
             try:
                 data = await self._async_request(
                     {
@@ -410,7 +481,7 @@ class Troy2Api:
         }
         data = await self._async_request(params)
         if data.get("result") is not True:
-            raise Troy2Error(f"TRO.Y rejected {command} command: {data}")
+            raise Troy2NodeAddressError(f"TRO.Y rejected {command} command: {data}")
 
     async def _async_wired_command(self, command: str) -> None:
         address = self._wired_address()
@@ -432,7 +503,9 @@ class Troy2Api:
 
     def _wireless_node(self) -> str:
         if not self._node_id:
-            raise Troy2Error(f"No wireless node address for {self._shade.label}")
+            raise Troy2NodeAddressError(
+                f"No wireless node address for {self._shade.label}"
+            )
         return self._node_id
 
     def _wired_address(self) -> str:
@@ -445,7 +518,13 @@ class Troy2Api:
         return raw[::-1].hex().upper()
 
     async def _async_request(self, params: dict[str, str]) -> dict[str, Any]:
-        return await _async_request(self._session, self._url, self._host, params)
+        return await _async_request(
+            self._session,
+            self._url,
+            self._host,
+            params,
+            self._context,
+        )
 
 
 def normalize_host(host: str) -> str:
@@ -464,14 +543,25 @@ async def _async_request(
     url: str,
     host: str,
     params: dict[str, str],
+    context: Troy2ControllerContext | None = None,
 ) -> dict[str, Any]:
+    started = context.request_started() if context is not None else monotonic()
+    successful = False
     try:
         async with session.get(url, params=params, timeout=10) as response:
             response.raise_for_status()
             data = await response.json(content_type=None)
-    except (ClientError, TimeoutError) as err:
+        if not isinstance(data, dict):
+            raise Troy2Error(f"Unexpected response type: {type(data).__name__}")
+        successful = True
+    except TimeoutError as err:
+        raise Troy2TimeoutError("TRO.Y request timed out after 10 seconds") from err
+    except ClientResponseError as err:
+        raise Troy2HttpError(f"TRO.Y HTTP request failed with status {err.status}") from err
+    except ClientError as err:
         raise Troy2ConnectionError(
-            f"Unable to communicate with TRO.Y 2 at {host}: {err}"
+            f"Unable to communicate with TRO.Y 2 at {host}: "
+            f"{str(err) or type(err).__name__}"
         ) from err
     except ValueError as err:
         raise Troy2Error(f"Invalid JSON response from TRO.Y 2 at {host}: {err}") from err
@@ -480,10 +570,11 @@ async def _async_request(
         # Home Assistant shutdown. Normalize only that known session state;
         # unrelated RuntimeError programming faults must remain visible.
         if getattr(session, "closed", False) or str(err) == "Session is closed":
-            raise Troy2ConnectionError(
-                f"Unable to communicate with TRO.Y 2 at {host}: session closed"
+            raise Troy2ShutdownError(
+                "Home Assistant HTTP session closed during TRO.Y shutdown"
             ) from err
         raise
-    if not isinstance(data, dict):
-        raise Troy2Error(f"Unexpected response type: {type(data).__name__}")
+    finally:
+        if context is not None:
+            context.request_finished(started, successful=successful)
     return data

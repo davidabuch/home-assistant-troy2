@@ -15,7 +15,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import Troy2Coordinator
+from .coordinator import Troy2ControllerRuntime
 
 
 async def async_setup_entry(
@@ -23,11 +23,13 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    coordinators: list[Troy2Coordinator] = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([Troy2Shade(coordinator, entry) for coordinator in coordinators])
+    runtime: Troy2ControllerRuntime = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities(
+        [Troy2Shade(runtime, entry, api.shade.native_id) for api in runtime.apis]
+    )
 
 
-class Troy2Shade(CoordinatorEntity[Troy2Coordinator], CoverEntity):
+class Troy2Shade(CoordinatorEntity[Troy2ControllerRuntime], CoverEntity):
     """A single TRO.Y 2 shade."""
 
     _attr_supported_features = (
@@ -42,77 +44,72 @@ class Troy2Shade(CoordinatorEntity[Troy2Coordinator], CoverEntity):
     # existing users' explicit enabled/disabled choices remain untouched.
     _attr_entity_registry_enabled_default = True
 
-    def __init__(self, coordinator: Troy2Coordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
+    def __init__(
+        self,
+        runtime: Troy2ControllerRuntime,
+        entry: ConfigEntry,
+        shade_id: str,
+    ) -> None:
+        super().__init__(runtime)
         self._entry = entry
-        shade = coordinator.api.shade
+        self._shade_id = shade_id
+        self._api = runtime.api_for(shade_id)
+        shade = self._api.shade
         legacy_node = str(entry.data.get("node_id", "")).upper().removeprefix("0X")
         if shade.node_id == legacy_node:
             # Preserve the legacy-configured entity and HomeKit identity.
-            self._attr_unique_id = f"{coordinator.api.host}_{legacy_node}".lower()
+            self._attr_unique_id = f"{self._api.host}_{legacy_node}".lower()
         else:
-            self._attr_unique_id = f"{coordinator.api.host}_{shade.native_id}".lower()
+            self._attr_unique_id = f"{self._api.host}_{shade.native_id}".lower()
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._attr_unique_id)},
             name=shade.label,
             manufacturer="Screen Innovations",
             model="TRO.Y 2 Wired Shade" if shade.wired else "TRO.Y 2 Wireless Shade",
-            configuration_url=f"http://{coordinator.api.host}/",
+            configuration_url=f"http://{self._api.host}/",
         )
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.shade_snapshot(self._shade_id).available
 
     @property
     def current_cover_position(self) -> int | None:
-        return self.coordinator.data
+        return self.coordinator.shade_snapshot(self._shade_id).position
 
     @property
     def is_closed(self) -> bool | None:
-        if self.coordinator.data is None:
+        position = self.current_cover_position
+        if position is None:
             return None
-        return self.coordinator.data == 0
+        return position == 0
 
     @property
     def is_opening(self) -> bool:
-        return self.coordinator.movement_direction == "opening"
+        return (
+            self.coordinator.shade_snapshot(self._shade_id).movement_direction
+            == "opening"
+        )
 
     @property
     def is_closing(self) -> bool:
-        return self.coordinator.movement_direction == "closing"
+        return (
+            self.coordinator.shade_snapshot(self._shade_id).movement_direction
+            == "closing"
+        )
 
     async def async_open_cover(self, **kwargs) -> None:
-        await self.coordinator.api.async_open()
-        self.coordinator.start_movement_polling(
-            target_position=100,
-            direction="opening",
-        )
+        await self.coordinator.async_open(self._shade_id)
 
     async def async_close_cover(self, **kwargs) -> None:
-        await self.coordinator.api.async_close()
-        self.coordinator.start_movement_polling(
-            target_position=0,
-            direction="closing",
-        )
+        await self.coordinator.async_close(self._shade_id)
 
     async def async_stop_cover(self, **kwargs) -> None:
-        await self.coordinator.api.async_stop()
-        self.coordinator.start_movement_polling(
-            target_position=None,
-            direction=None,
-        )
+        await self.coordinator.async_stop(self._shade_id)
 
     async def async_set_cover_position(self, **kwargs) -> None:
         position = int(kwargs[ATTR_POSITION])
-        await self.coordinator.api.async_set_position(position)
-        current = self.coordinator.data
-        direction = None
-        if current is not None:
-            if position > current:
-                direction = "opening"
-            elif position < current:
-                direction = "closing"
-        self.coordinator.start_movement_polling(
-            target_position=position,
-            direction=direction,
-        )
+        await self.coordinator.async_set_position(self._shade_id, position)
 
     async def async_set_wired_speeds(
         self,
@@ -121,11 +118,12 @@ class Troy2Shade(CoordinatorEntity[Troy2Coordinator], CoverEntity):
         slow_speed: int,
     ) -> None:
         """Set all rolling speeds for this RS485 motor."""
-        if not self.coordinator.api.shade.wired:
+        if not self._api.shade.wired:
             raise HomeAssistantError(
                 "Motor speed settings are only supported for wired shades"
             )
-        await self.coordinator.api.async_set_wired_speeds(
+        await self.coordinator.async_set_wired_speeds(
+            self._shade_id,
             up_speed,
             down_speed,
             slow_speed,
