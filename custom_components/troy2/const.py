@@ -4,7 +4,7 @@ DOMAIN = "troy2"
 PLATFORMS = ["cover"]
 
 CONTROLLER_TITLE = "TRO.Y 2 Shade Controller"
-INTEGRATION_VERSION = "0.3.16"
+INTEGRATION_VERSION = "0.3.17"
 
 SERVICE_SET_WIRED_SPEEDS = "set_wired_speeds"
 

@@ -38,6 +38,7 @@ Instead of treating Home Assistant as the only source of state, this integration
 - **Native Home Assistant covers** — open, close, stop, and percentage positioning.
 - **Fast movement tracking** — position polling accelerates while a Home Assistant-commanded movement is active.
 - **Low-overhead idle polling** — idle shade state is reconciled every 20 seconds to reduce unnecessary controller traffic.
+- **Fair controller scheduling** — one shared runtime prioritizes commands and moving shades while continuing to refresh idle shades.
 - **Transient-response resilience** — temporary TRO.Y position responses such as `file empty` are handled without unnecessarily dropping an otherwise healthy shade.
 - **Wired-motor speed control** — compatible RS485 shades can store independent up, down, and slow speed settings.
 - **Direction-safe speed updates** — changing wired motor speeds does not modify the motor's persistent direction setting.
@@ -78,7 +79,7 @@ This integration periodically reconciles with TRO.Y so Home Assistant can follow
 
 ## Target release
 
-**Version 0.3.16** introduces controller-only setup and reliability hardening.
+**Version 0.3.17** introduces controller-level runtime coordination and corrected outage detection.
 
 The current implementation includes:
 
@@ -88,7 +89,10 @@ The current implementation includes:
 - controller-sourced position polling
 - 20-second idle reconciliation
 - 1-second movement polling while a commanded movement is active
-- serialized controller traffic
+- one controller-level scheduler with serialized controller traffic
+- fair, bounded polling without stale-request backlog
+- failure episodes measured from actual failed requests
+- separate controller-wide and per-shade health state
 - resilient startup discovery
 - transient position-response handling
 - wired Up / Down / Slow motor speed configuration
@@ -162,9 +166,13 @@ This repository does not implement a separate HomeKit or voice-assistant protoco
 
 TRO.Y occasionally returns temporary position responses without usable shade data. The integration treats known transient position conditions separately from true controller failures so a brief controller timing condition does not unnecessarily mark a healthy shade unavailable.
 
-Established shades retain their last known position and remain available for communication misses shorter than 60 seconds. A sustained outage becomes a normal Home Assistant update failure and marks the affected shade unavailable; a later successful poll restores it cleanly.
+Established shades retain their last known position after an isolated communication failure. The outage clock starts when an actual request fails; poll lateness or the age of an earlier successful poll is not counted as failure time. Repeated actual failures spanning approximately 60 seconds confirm an outage, while any successful request clears the current failure episode immediately.
 
-All discovery, polling, and command traffic remains sequential. Every shade on one controller shares a single asynchronous lock, including rapid movement tracking, so requests cannot interleave on TRO.Y. Wireless shades retain identity from their permanent native identifier and retry once with a freshly resolved Zigbee network address when the cached address stops responding.
+One controller-level runtime owns idle polls, faster movement polls, and commands. Poll work is represented by one due time per shade rather than an accumulating queue. Commands normally run first, while oldest-due poll selection and a command-burst limit keep moving and idle shades from starving one another. Every operation also shares one asynchronous controller lock, so requests cannot interleave on TRO.Y.
+
+Health is tracked independently per shade and at the controller level. Repeated failures from one shade do not make successful sibling shades unavailable. Continuous transport failures across multiple shades can confirm controller or network loss, with clean automatic recovery after the next successful communication.
+
+Wireless shades retain identity from their permanent native identifier. A current Zigbee network address is refreshed only after a missing-address or explicit address-like rejection; a timeout, transient `file empty`, or malformed response does not automatically add lookup and retry traffic.
 
 Idle polling is intentionally slower than active movement polling:
 
@@ -173,7 +181,7 @@ Idle polling is intentionally slower than active movement polling:
 
 This keeps state reasonably fresh while avoiding constant unnecessary traffic to the controller.
 
-Home Assistant diagnostics report integration version, aggregate controller health, shade count, wired/wireless technology, and coordinator health. Controller addresses, shade names, node addresses, and permanent native identifiers are omitted.
+Home Assistant diagnostics report integration version, scheduler state, aggregate request counts and latency, poll lateness, controller health, and privacy-safe per-shade failure and movement state. Controller addresses, shade names, node addresses, and permanent native identifiers are omitted.
 
 ## Privacy
 

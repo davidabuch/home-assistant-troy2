@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.17
+
+- Coordinated all shade polling and commands through one controller-level runtime.
+- Added fair, bounded multi-shade scheduling with command priority and faster movement observation.
+- Corrected availability so outage duration begins with the first actual failed request, not the age of a previous successful poll.
+- Distinguished controller-wide communication loss from an individual shade failure and preserved healthy sibling shades.
+- Improved timeout, HTTP, malformed-response, Zigbee-address, and orderly-shutdown diagnostics.
+
 ## v0.3.16
 
 - Replaced seed-shade setup with controller-address-only setup and automatic shade discovery.
