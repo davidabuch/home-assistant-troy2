@@ -8,6 +8,7 @@
 - Distinguished controller-wide communication loss from an individual shade failure and preserved healthy sibling shades.
 - Kept shades unverified after a controller outage until each shade reports successfully, with a prompt recovery sweep.
 - Moved initial position acquisition into the bounded scheduler and backed off repeatedly failing shades without changing the 10-second request timeout.
+- Registered the long-lived controller scheduler as background work so it does not delay Home Assistant startup.
 - Improved timeout, HTTP, malformed-response, Zigbee-address, and orderly-shutdown diagnostics.
 - Added stable privacy-safe anonymous shade correlation to diagnostics.
 

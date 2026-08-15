@@ -199,7 +199,7 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
         if self.scheduler_running:
             return
         self._stopping = False
-        self._scheduler_task = self.hass.async_create_task(
+        self._scheduler_task = self.hass.async_create_background_task(
             self._async_scheduler_loop(),
             f"{DOMAIN}_controller_scheduler",
         )

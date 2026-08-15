@@ -414,6 +414,34 @@ async def test_async_start_does_not_wait_for_initial_position_timeout(hass) -> N
 
 
 @pytest.mark.asyncio
+async def test_scheduler_is_a_background_task_not_startup_tracked() -> None:
+    """The permanent scheduler must not delay Home Assistant bootstrap."""
+    tasks: list[asyncio.Task[None]] = []
+
+    class _Hass:
+        def async_create_background_task(
+            self,
+            coro,
+            name: str,
+        ) -> asyncio.Task[None]:
+            task = asyncio.create_task(coro, name=name)
+            tasks.append(task)
+            return task
+
+        def async_create_task(self, coro, name: str):
+            coro.close()
+            raise AssertionError(f"startup-tracked task created: {name}")
+
+    runtime, _, _ = _runtime(_Hass(), 1)
+    await runtime.async_start()
+
+    assert len(tasks) == 1
+    assert tasks[0].get_name() == "troy2_controller_scheduler"
+    assert runtime.scheduler_running
+    await runtime.async_shutdown()
+
+
+@pytest.mark.asyncio
 async def test_simultaneous_commands_are_serialized(hass) -> None:
     runtime, apis, _ = _runtime(hass, 13)
     active = 0
