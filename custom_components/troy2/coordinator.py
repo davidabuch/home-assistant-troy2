@@ -199,6 +199,13 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
         if self.scheduler_running:
             return
         self._stopping = False
+        # A zero due-time means "poll immediately" before the runtime starts,
+        # but it is not a timestamp in the monotonic clock's current epoch.
+        # Anchor initial work to now so startup uptime is never reported as
+        # scheduler poll lateness.
+        now = self._clock()
+        for state in self._states.values():
+            state.next_poll_due = now
         self._scheduler_task = self.hass.async_create_background_task(
             self._async_scheduler_loop(),
             f"{DOMAIN}_controller_scheduler",

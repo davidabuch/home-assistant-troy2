@@ -9,6 +9,7 @@
 - Kept shades unverified after a controller outage until each shade reports successfully, with a prompt recovery sweep.
 - Moved initial position acquisition into the bounded scheduler and backed off repeatedly failing shades without changing the 10-second request timeout.
 - Registered the long-lived controller scheduler as background work so it does not delay Home Assistant startup.
+- Anchored initial scheduler due-times to runtime startup so diagnostics do not misreport controller uptime as poll lateness.
 - Improved timeout, HTTP, malformed-response, Zigbee-address, and orderly-shutdown diagnostics.
 - Added stable privacy-safe anonymous shade correlation to diagnostics.
 

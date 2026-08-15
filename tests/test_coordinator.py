@@ -414,6 +414,21 @@ async def test_async_start_does_not_wait_for_initial_position_timeout(hass) -> N
 
 
 @pytest.mark.asyncio
+async def test_startup_uptime_is_not_reported_as_poll_lateness(hass) -> None:
+    """Initial due work starts now, not at monotonic time zero."""
+    clock = _Clock(now=521_191.0)
+    runtime, apis, _ = _runtime(hass, 1, clock)
+
+    await runtime.async_start()
+    while apis[0].async_get_position.await_count == 0:
+        await asyncio.sleep(0)
+    await runtime.async_shutdown()
+
+    assert runtime.maximum_poll_lateness == 0
+    assert runtime.shade_snapshot("000000").poll_lateness == 0
+
+
+@pytest.mark.asyncio
 async def test_scheduler_is_a_background_task_not_startup_tracked() -> None:
     """The permanent scheduler must not delay Home Assistant bootstrap."""
     tasks: list[asyncio.Task[None]] = []
