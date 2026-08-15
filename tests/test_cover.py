@@ -28,12 +28,19 @@ def _entity(*, node_id: str | None = "1234", legacy_node: str = "1234"):
         async_set_wired_speeds=AsyncMock(),
     )
     coordinator = MagicMock()
-    coordinator.api = api
-    coordinator.data = 50
-    coordinator.movement_direction = None
-    coordinator.start_movement_polling = MagicMock()
+    coordinator.api_for.return_value = api
+    coordinator.shade_snapshot.return_value = SimpleNamespace(
+        position=50,
+        available=True,
+        movement_direction=None,
+    )
+    coordinator.async_open = AsyncMock()
+    coordinator.async_close = AsyncMock()
+    coordinator.async_stop = AsyncMock()
+    coordinator.async_set_position = AsyncMock()
+    coordinator.async_set_wired_speeds = AsyncMock()
     entry = SimpleNamespace(data={"node_id": legacy_node})
-    return Troy2Shade(coordinator, entry), coordinator
+    return Troy2Shade(coordinator, entry, api.shade.native_id), coordinator
 
 
 def test_legacy_seed_entity_unique_id_is_stable() -> None:
@@ -57,12 +64,12 @@ def test_new_entities_default_enabled() -> None:
 @pytest.mark.asyncio
 async def test_failed_command_does_not_start_movement_polling() -> None:
     entity, coordinator = _entity()
-    coordinator.api.async_open.side_effect = Troy2Error("rejected")
+    coordinator.async_open.side_effect = Troy2Error("rejected")
 
     with pytest.raises(Troy2Error, match="rejected"):
         await entity.async_open_cover()
 
-    coordinator.start_movement_polling.assert_not_called()
+    coordinator.async_open.assert_awaited_once_with("00124B0000000001")
 
 
 @pytest.mark.asyncio
@@ -71,7 +78,4 @@ async def test_stop_replaces_only_this_shades_tracker() -> None:
 
     await entity.async_stop_cover()
 
-    coordinator.start_movement_polling.assert_called_once_with(
-        target_position=None,
-        direction=None,
-    )
+    coordinator.async_stop.assert_awaited_once_with("00124B0000000001")
