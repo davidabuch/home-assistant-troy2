@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -171,3 +172,48 @@ async def test_platform_setup_failure_cleans_up_runtime(hass) -> None:
 
     runtime.async_shutdown.assert_awaited_once()
     assert entry.entry_id not in hass.data[DOMAIN]
+
+
+@pytest.mark.asyncio
+async def test_discovery_success_with_bad_shades_does_not_block_setup(hass) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_HOST: "troy.local"},
+        unique_id="troy.local",
+        version=2,
+    )
+    entry.add_to_hass(hass)
+    entered = asyncio.Event()
+
+    async def blocked_position() -> int:
+        entered.set()
+        await asyncio.Event().wait()
+        return 50
+
+    position = AsyncMock(side_effect=blocked_position)
+    with (
+        patch(
+            "custom_components.troy2._async_discover_shades",
+            return_value=[_shade(index) for index in range(1, 6)],
+        ),
+        patch(
+            "custom_components.troy2.Troy2Api.async_get_position",
+            new=position,
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            new=AsyncMock(),
+        ),
+    ):
+        assert await asyncio.wait_for(async_setup_entry(hass, entry), timeout=0.1)
+        await entered.wait()
+
+    runtime = hass.data[DOMAIN].pop(entry.entry_id)
+    assert runtime.scheduler_running
+    assert position.await_count == 1
+    assert all(
+        not runtime.shade_snapshot(api.shade.native_id).available
+        for api in runtime.apis
+    )
+    await runtime.async_shutdown()

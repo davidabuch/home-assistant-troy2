@@ -22,6 +22,7 @@ from .const import (
     COMMUNICATION_FAILURE_GRACE_SECONDS,
     DEFAULT_SCAN_INTERVAL_SECONDS,
     DOMAIN,
+    MAX_FAILURE_POLL_BACKOFF_SECONDS,
     MOVEMENT_MINIMUM_POLL_SECONDS,
     MOVEMENT_POLL_INTERVAL_SECONDS,
     MOVEMENT_POLL_TIMEOUT_SECONDS,
@@ -47,6 +48,7 @@ class _ShadeRuntimeState:
     failure_reason: str | None = None
     consecutive_failures: int = 0
     confirmed_unavailable: bool = False
+    verification_required: bool = False
     target_position: int | None = None
     movement_direction: str | None = None
     rapid_polling: bool = False
@@ -74,6 +76,8 @@ class Troy2ShadeSnapshot:
     movement_direction: str | None
     rapid_polling: bool
     poll_lateness: float
+    failure_poll_backoff: float
+    verification_required: bool
 
 
 @dataclass(slots=True)
@@ -171,6 +175,7 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
             established
             and not state.confirmed_unavailable
             and not self._controller_confirmed_unavailable
+            and not state.verification_required
         )
         return Troy2ShadeSnapshot(
             position=state.position,
@@ -185,15 +190,15 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
             movement_direction=state.movement_direction,
             rapid_polling=state.rapid_polling,
             poll_lateness=state.poll_lateness,
+            failure_poll_backoff=self._failure_poll_backoff(state),
+            verification_required=state.verification_required,
         )
 
     async def async_start(self) -> None:
-        """Establish initial state, then start the one scheduler task."""
+        """Start background initial acquisition and ongoing scheduling."""
         if self.scheduler_running:
             return
         self._stopping = False
-        for state in self._states.values():
-            await self._async_poll_state(state)
         self._scheduler_task = self.hass.async_create_task(
             self._async_scheduler_loop(),
             f"{DOMAIN}_controller_scheduler",
@@ -394,7 +399,7 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
                 command.future.set_exception(err)
             raise
         else:
-            self._record_success(state)
+            self._record_success(state, verifies_state=False)
             if command.track_movement:
                 self._start_movement(
                     state,
@@ -427,9 +432,15 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
                 if state.rapid_polling
                 else DEFAULT_SCAN_INTERVAL_SECONDS
             )
+            interval = max(interval, self._failure_poll_backoff(state))
             state.next_poll_due = self._clock() + interval
 
-    def _record_success(self, state: _ShadeRuntimeState) -> None:
+    def _record_success(
+        self,
+        state: _ShadeRuntimeState,
+        *,
+        verifies_state: bool = True,
+    ) -> None:
         now = self._clock()
         recovered = state.failure_started is not None
         state.last_success = now
@@ -438,6 +449,8 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
         state.failure_reason = None
         state.consecutive_failures = 0
         state.confirmed_unavailable = False
+        if verifies_state:
+            state.verification_required = False
         self._last_controller_success = now
         controller_recovered = self._controller_confirmed_unavailable
         self._controller_failure_started = None
@@ -449,6 +462,10 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
             _LOGGER.debug("TRO.Y shade communication recovered")
         if controller_recovered:
             _LOGGER.info("TRO.Y controller communication recovered")
+            for other_state in self._states.values():
+                if other_state.verification_required:
+                    other_state.next_poll_due = min(other_state.next_poll_due, now)
+            self._wake.set()
         self.async_set_updated_data(self._positions())
 
     def _record_failure(self, state: _ShadeRuntimeState, err: Troy2Error) -> None:
@@ -490,6 +507,8 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
                 and controller_age >= COMMUNICATION_FAILURE_GRACE_SECONDS
             ):
                 self._controller_confirmed_unavailable = True
+                for other_state in self._states.values():
+                    other_state.verification_required = True
                 self.async_set_update_error(
                     UpdateFailed(
                         "TRO.Y controller unavailable after sustained "
@@ -561,6 +580,17 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
         if state.movement_started is None:
             return 0.0
         return max(0.0, self._clock() - state.movement_started)
+
+    @staticmethod
+    def _failure_poll_backoff(state: _ShadeRuntimeState) -> float:
+        """Back off a repeatedly failing shade without changing HTTP timeout."""
+        if state.consecutive_failures < 3:
+            return 0.0
+        exponent = state.consecutive_failures - 2
+        return min(
+            DEFAULT_SCAN_INTERVAL_SECONDS * (2**exponent),
+            MAX_FAILURE_POLL_BACKOFF_SECONDS,
+        )
 
     def _positions(self) -> dict[str, int]:
         return {

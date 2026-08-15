@@ -175,11 +175,39 @@ async def test_multi_shade_controller_outage_and_clean_recovery(hass) -> None:
         for index in range(13)
     )
 
+    clock.now = 160.5
+    runtime._record_success(_state(runtime, 2), verifies_state=False)
+    assert not runtime.controller_confirmed_unavailable
+    assert all(
+        not runtime.shade_snapshot(f"{index:06X}").available
+        for index in range(13)
+    )
+
     clock.now = 161
     apis[2].async_get_position.side_effect = None
     await runtime._async_poll_state(_state(runtime, 2))
     assert not runtime.controller_confirmed_unavailable
     assert runtime.shade_snapshot("000002").available
+    assert all(
+        not runtime.shade_snapshot(f"{index:06X}").available
+        for index in range(13)
+        if index != 2
+    )
+    assert all(
+        runtime.shade_snapshot(f"{index:06X}").verification_required
+        for index in range(13)
+        if index != 2
+    )
+
+    for index in (3, 4, 5):
+        clock.now += 1
+        apis[index].async_get_position.side_effect = None
+        await runtime._async_poll_state(_state(runtime, index))
+        assert runtime.shade_snapshot(f"{index:06X}").available
+        assert not runtime.shade_snapshot(f"{index:06X}").verification_required
+
+    assert not runtime.shade_snapshot("000000").available
+    assert not runtime.shade_snapshot("000001").available
 
 
 @pytest.mark.asyncio
@@ -255,6 +283,134 @@ def test_poll_work_is_coalesced_and_bounded(hass) -> None:
 
     assert runtime.pending_work_count == 13
     assert len(runtime._commands) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dead_count", [1, 2, 5])
+async def test_real_timeout_capacity_backoff_and_healthy_lateness(
+    hass,
+    dead_count: int,
+) -> None:
+    """Each failed request consumes 10 seconds without monopolizing service."""
+    runtime, apis, clock = _runtime(hass, 13)
+    healthy_lateness: list[float] = []
+
+    for index, state in enumerate(runtime._states.values()):
+        state.position = 50
+        state.last_success = 0
+        state.next_poll_due = 20
+
+        if index < dead_count:
+            async def timeout() -> int:
+                await asyncio.sleep(0)
+                clock.now += 10
+                raise Troy2TimeoutError("TRO.Y request timed out after 10 seconds")
+
+            apis[index].async_get_position.side_effect = timeout
+        else:
+            async def success() -> int:
+                await asyncio.sleep(0)
+                return 50
+
+            apis[index].async_get_position.side_effect = success
+
+    clock.now = 20
+    while clock.now < 900:
+        selected = runtime._select_due_state(clock.now)
+        if selected is None:
+            clock.now = min(state.next_poll_due for state in runtime._states.values())
+            continue
+        await runtime._async_poll_state(selected)
+        if selected.order >= dead_count:
+            healthy_lateness.append(selected.poll_lateness)
+
+    dead_attempts = [apis[index].async_get_position.await_count for index in range(dead_count)]
+    healthy_attempts = [
+        apis[index].async_get_position.await_count for index in range(dead_count, 13)
+    ]
+    assert max(healthy_lateness) == {1: 10, 2: 20, 5: 50}[dead_count]
+    assert min(healthy_attempts) == {1: 41, 2: 40, 5: 35}[dead_count]
+    assert dead_attempts == [7] * dead_count
+    assert all(
+        runtime.shade_snapshot(f"{index:06X}").failure_poll_backoff == 300
+        for index in range(dead_count)
+    )
+
+
+@pytest.mark.asyncio
+async def test_command_wait_is_limited_to_current_ten_second_request(hass) -> None:
+    runtime, apis, clock = _runtime(hass, 13)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    command_times: list[float] = []
+    events: list[str] = []
+
+    for state in runtime._states.values():
+        state.position = 50
+        state.last_success = 0
+        state.next_poll_due = 100
+    for index in range(5):
+        _state(runtime, index).next_poll_due = 0
+
+    async def timeout() -> int:
+        entered.set()
+        await release.wait()
+        clock.now += 10
+        events.append("active-timeout")
+        raise Troy2TimeoutError("TRO.Y request timed out after 10 seconds")
+
+    async def command() -> None:
+        command_times.append(clock.now)
+        events.append("command")
+
+    def later_timeout(index: int):
+        async def run() -> int:
+            events.append(f"later-timeout-{index}")
+            raise Troy2TimeoutError("timeout")
+
+        return run
+
+    apis[0].async_get_position.side_effect = timeout
+    for index in range(1, 5):
+        apis[index].async_get_position.side_effect = later_timeout(index)
+    apis[12].async_open.side_effect = command
+    await runtime.async_start()
+    await entered.wait()
+    submitted_at = clock.now
+    command_task = asyncio.create_task(runtime.async_open("00000C"))
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.wait_for(command_task, timeout=2)
+    await runtime.async_shutdown()
+
+    assert command_times == [submitted_at + 10]
+    assert events[:2] == ["active-timeout", "command"]
+    assert apis[0].async_get_position.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_async_start_does_not_wait_for_initial_position_timeout(hass) -> None:
+    runtime, apis, _ = _runtime(hass, 13)
+    entered = asyncio.Event()
+
+    async def blocked_poll() -> int:
+        entered.set()
+        await asyncio.Event().wait()
+        return 50
+
+    for api in apis:
+        api.async_get_position.side_effect = blocked_poll
+
+    await asyncio.wait_for(runtime.async_start(), timeout=0.1)
+    await entered.wait()
+
+    assert runtime.scheduler_running
+    assert sum(api.async_get_position.await_count for api in apis) == 1
+    assert all(
+        not runtime.shade_snapshot(f"{index:06X}").available
+        for index in range(13)
+    )
+    await runtime.async_shutdown()
 
 
 @pytest.mark.asyncio

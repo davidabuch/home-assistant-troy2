@@ -172,6 +172,10 @@ One controller-level runtime owns idle polls, faster movement polls, and command
 
 Health is tracked independently per shade and at the controller level. Repeated failures from one shade do not make successful sibling shades unavailable. Continuous transport failures across multiple shades can confirm controller or network loss, with clean automatic recovery after the next successful communication.
 
+After a confirmed controller outage, restored controller reachability does not immediately expose stale sibling state. Each shade remains unavailable until its own position is verified; the scheduler makes unverified shades immediately due for a fair recovery sweep. Repeatedly timing-out shades use bounded poll backoff so they continue receiving recovery attempts without consuming a disproportionate share of controller capacity. The proven 10-second HTTP timeout is unchanged.
+
+Initial position acquisition also runs through the controller scheduler after discovery. Setup therefore does not wait through a sequential timeout for every unavailable shade; entities appear with normal unavailable/unknown state until their first successful position report.
+
 Wireless shades retain identity from their permanent native identifier. A current Zigbee network address is refreshed only after a missing-address or explicit address-like rejection; a timeout, transient `file empty`, or malformed response does not automatically add lookup and retry traffic.
 
 Idle polling is intentionally slower than active movement polling:
@@ -181,7 +185,7 @@ Idle polling is intentionally slower than active movement polling:
 
 This keeps state reasonably fresh while avoiding constant unnecessary traffic to the controller.
 
-Home Assistant diagnostics report integration version, scheduler state, aggregate request counts and latency, poll lateness, controller health, and privacy-safe per-shade failure and movement state. Controller addresses, shade names, node addresses, and permanent native identifiers are omitted.
+Home Assistant diagnostics report integration version, scheduler state, aggregate request counts and latency, poll lateness, controller health, and privacy-safe per-shade failure and movement state. A stable entry-scoped anonymous token allows the same shade to be correlated across repeated diagnostic captures. Controller addresses, shade names, node addresses, and permanent native identifiers are omitted.
 
 ## Privacy
 

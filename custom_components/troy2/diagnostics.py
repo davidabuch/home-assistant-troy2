@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hmac
+from hashlib import sha256
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -62,6 +64,10 @@ async def async_get_config_entry_diagnostics(
         },
         "shades": [
             {
+                "anonymous_id": _anonymous_shade_id(
+                    entry.entry_id,
+                    api.shade.native_id,
+                ),
                 "technology": "wired" if api.shade.wired else "wireless",
                 "available": snapshot.available,
                 "has_position": snapshot.position_known,
@@ -74,6 +80,11 @@ async def async_get_config_entry_diagnostics(
                 "consecutive_failures": snapshot.consecutive_failures,
                 "moving": snapshot.rapid_polling,
                 "poll_lateness_seconds": round(snapshot.poll_lateness, 1),
+                "failure_poll_backoff_seconds": round(
+                    snapshot.failure_poll_backoff,
+                    1,
+                ),
+                "verification_required": snapshot.verification_required,
             }
             for api, snapshot in zip(runtime.apis, snapshots, strict=True)
         ],
@@ -83,3 +94,13 @@ async def async_get_config_entry_diagnostics(
 def _rounded(value: float | None) -> float | None:
     """Round a diagnostic age without exposing an internal clock."""
     return round(value, 1) if value is not None else None
+
+
+def _anonymous_shade_id(entry_id: str, native_id: str) -> str:
+    """Return a stable entry-scoped token without exposing a motor identifier."""
+    digest = hmac.new(
+        entry_id.encode(),
+        native_id.encode(),
+        sha256,
+    ).hexdigest()
+    return f"shade_{digest[:12]}"

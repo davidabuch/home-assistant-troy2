@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -50,7 +51,8 @@ async def test_diagnostics_are_observable_and_omit_household_identifiers(hass) -
     second.last_attempt = 95
     second.failure_started = 96
     second.failure_category = "timeout"
-    second.consecutive_failures = 1
+    second.consecutive_failures = 4
+    second.verification_required = True
     runtime._last_controller_success = 98.766
     runtime._max_poll_lateness = 4.5
 
@@ -78,6 +80,14 @@ async def test_diagnostics_are_observable_and_omit_household_identifiers(hass) -
     assert diagnostics["shades"][0]["poll_lateness_seconds"] == 2.2
     assert diagnostics["shades"][1]["failure_episode_age_seconds"] == 4.0
     assert diagnostics["shades"][1]["failure_category"] == "timeout"
+    assert diagnostics["shades"][1]["failure_poll_backoff_seconds"] == 80.0
+    assert diagnostics["shades"][1]["verification_required"] is True
+    anonymous_ids = [shade["anonymous_id"] for shade in diagnostics["shades"]]
+    assert anonymous_ids[0] != anonymous_ids[1]
+    assert all(re.fullmatch(r"shade_[0-9a-f]{12}", value) for value in anonymous_ids)
+
+    repeated = await async_get_config_entry_diagnostics(hass, entry)
+    assert [shade["anonymous_id"] for shade in repeated["shades"]] == anonymous_ids
     assert "private.example" not in serialized
     assert "Private room name" not in serialized
     assert "PRIVATE-NATIVE-ID" not in serialized
