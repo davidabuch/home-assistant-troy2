@@ -10,5 +10,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/davidabuch/home-assistant-troy2/issues",
   "requirements": [],
-  "version": "0.3.16"
+  "version": "0.3.17"
 }

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import pytest
 
@@ -77,20 +77,17 @@ async def test_wired_transient_position_responses(response: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_wireless_file_empty_re_resolves_and_remains_transient() -> None:
+async def test_wireless_file_empty_does_not_trigger_node_lookup() -> None:
     api = _api(_shade("00124B0000000001", wired=False, node_id="1234"))
     api._async_request = AsyncMock(
-        side_effect=[
-            {"msg": "file empty"},
-            {"node": "0x5678"},
-            {"msg": "file empty"},
-        ]
+        return_value={"msg": "file empty"}
     )
 
     with pytest.raises(Troy2TransientPositionError):
         await api.async_get_position()
 
-    assert api.node_id == "5678"
+    assert api.node_id == "1234"
+    assert api._async_request.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -98,7 +95,7 @@ async def test_wireless_node_address_re_resolution_recovers() -> None:
     api = _api(_shade("00124B0000000001", wired=False, node_id="1234"))
     api._async_request = AsyncMock(
         side_effect=[
-            {"msg": "file empty"},
+            {"result": False},
             {"node": "0x5678"},
             {"ATTR": {"attrValue": "25"}},
         ]
@@ -107,6 +104,35 @@ async def test_wireless_node_address_re_resolution_recovers() -> None:
     assert await api.async_get_position() == 75
     assert api.node_id == "5678"
     assert api._async_request.await_args_list[-1].args[0]["str1"] == "0x5678"
+
+
+@pytest.mark.asyncio
+async def test_wireless_timeout_does_not_monopolize_with_lookup_and_retry() -> None:
+    api = _api(_shade("00124B0000000001", wired=False, node_id="1234"))
+    api._async_request = AsyncMock(
+        side_effect=Troy2ConnectionError("TRO.Y request timed out after 10 seconds")
+    )
+
+    with pytest.raises(Troy2ConnectionError, match="timed out after 10 seconds"):
+        await api.async_get_position()
+
+    assert api._async_request.await_count == 1
+    assert api.node_id == "1234"
+
+
+@pytest.mark.asyncio
+async def test_missing_wireless_node_is_resolved_once_then_polled() -> None:
+    api = _api(_shade("00124B0000000001", wired=False, node_id=None))
+    api._async_request = AsyncMock(
+        side_effect=[
+            {"node": "0x5678"},
+            {"ATTR": {"attrValue": "25"}},
+        ]
+    )
+
+    assert await api.async_get_position() == 75
+    assert api.node_id == "5678"
+    assert api._async_request.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -142,6 +168,29 @@ async def test_result_false_rejects_wired_command() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "packet"),
+    [
+        ("async_open", "030F00010000C3B2A1010000000000"),
+        ("async_close", "030F00010000C3B2A1000000000000"),
+        ("async_stop", "020C00010000C3B2A1000000"),
+    ],
+)
+async def test_wired_open_close_stop_packets_are_unchanged(
+    method: str,
+    packet: str,
+) -> None:
+    api = _api()
+    api._async_request = AsyncMock(return_value={"result": True})
+
+    await getattr(api, method)()
+
+    assert api._async_request.await_args_list == [
+        call({"cmd": "49", "str1": packet})
+    ]
+
+
+@pytest.mark.asyncio
 async def test_wired_speed_uses_only_direction_safe_packet() -> None:
     api = _api()
     api._async_request = AsyncMock(return_value={"result": True})
@@ -168,6 +217,33 @@ async def test_wired_position_commands(position: int, expected_fragment: str) ->
         call.args[0].get("str1", "") for call in api._async_request.await_args_list
     ]
     assert any(packet.startswith(expected_fragment) for packet in packets)
+
+
+@pytest.mark.asyncio
+async def test_wired_intermediate_position_sequence_is_unchanged() -> None:
+    api = _api()
+    api._async_request = AsyncMock(return_value={"result": True})
+
+    await api.async_set_position(50)
+
+    assert [call.args[0] for call in api._async_request.await_args_list] == [
+        {"cmd": "37", "int1": "5"},
+        {
+            "cmd": "49",
+            "str1": "250C00010000C3B2A1090000",
+            "str2": "35",
+        },
+        {"cmd": "37", "int1": "5"},
+        {"cmd": "49", "str1": "150F00010000C3B2A1030932000000"},
+        {"cmd": "37", "int1": "5"},
+        {
+            "cmd": "49",
+            "str1": "250C00010000C3B2A1090000",
+            "str2": "35",
+        },
+        {"cmd": "49", "str1": "030F00010000C3B2A1020900000000"},
+        {"cmd": "49", "str1": "150F00010000C3B2A1000900000000"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -416,6 +492,27 @@ async def test_http_timeout_is_communication_error() -> None:
             "troy",
             {},
         )
+
+
+@pytest.mark.asyncio
+async def test_blank_timeout_has_meaningful_text_and_failed_counter() -> None:
+    context = Troy2ControllerContext()
+
+    with pytest.raises(
+        Troy2ConnectionError,
+        match="TRO.Y request timed out after 10 seconds",
+    ):
+        await _async_request(
+            _TimeoutSession(),
+            "http://troy/troy.cgi",
+            "troy",
+            {},
+            context,
+        )
+
+    assert context.total_successful_requests == 0
+    assert context.total_failed_requests == 1
+    assert context.request_in_progress is False
 
 
 @pytest.mark.asyncio

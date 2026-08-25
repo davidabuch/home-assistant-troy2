@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.17
+
+- Coordinated all shade polling and commands through one controller-level runtime.
+- Added fair, bounded multi-shade scheduling with command priority and faster movement observation.
+- Corrected availability so outage duration begins with the first actual failed request, not the age of a previous successful poll.
+- Distinguished controller-wide communication loss from an individual shade failure and preserved healthy sibling shades.
+- Kept shades unverified after a controller outage until each shade reports successfully, with a prompt recovery sweep.
+- Moved initial position acquisition into the bounded scheduler and backed off repeatedly failing shades without changing the 10-second request timeout.
+- Registered the long-lived controller scheduler as background work so it does not delay Home Assistant startup.
+- Anchored initial scheduler due-times to runtime startup so diagnostics do not misreport controller uptime as poll lateness.
+- Improved timeout, HTTP, malformed-response, Zigbee-address, and orderly-shutdown diagnostics.
+- Added stable privacy-safe anonymous shade correlation to diagnostics.
+
 ## v0.3.16
 
 - Replaced seed-shade setup with controller-address-only setup and automatic shade discovery.

@@ -7,8 +7,8 @@ import asyncio
 import voluptuous as vol
 from homeassistant.components.cover import DOMAIN as COVER_DOMAIN
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST
-from homeassistant.core import HomeAssistant
+from homeassistant.const import CONF_HOST, EVENT_HOMEASSISTANT_STOP
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import service
@@ -36,7 +36,7 @@ from .const import (
     PLATFORMS,
     SERVICE_SET_WIRED_SPEEDS,
 )
-from .coordinator import Troy2Coordinator
+from .coordinator import Troy2ControllerRuntime
 
 SETUP_DISCOVERY_SCAN_DELAY_SECONDS = 2
 
@@ -132,14 +132,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up TRO.Y 2 from a config entry."""
     session = async_get_clientsession(hass)
     host = entry.data[CONF_HOST]
-    hub_api = Troy2HubApi(session, host)
+    controller_context = Troy2ControllerContext()
+    hub_api = Troy2HubApi(session, host, controller_context)
     # TRO.Y can occasionally return an incomplete device index during startup.
     # Merge two scans so a shade omitted from either response is still loaded.
     # A failed scan is harmless when the other scan finds shades; if neither
     # succeeds, ConfigEntryNotReady lets Home Assistant retry automatically.
     shades = await _async_discover_shades(hub_api, host)
-    controller_context = Troy2ControllerContext()
-
     # If discovery ever omits the previously configured shade, keep it working.
     legacy_node = str(entry.data.get(CONF_NODE_ID, "")).upper().removeprefix("0X")
     if legacy_node and not any(shade.node_id == legacy_node for shade in shades):
@@ -154,21 +153,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
         )
 
-    coordinators: list[Troy2Coordinator] = []
-    for shade in shades:
-        coordinator = Troy2Coordinator(
-            hass,
-            Troy2Api(session, host, shade, controller_context),
-        )
-        if shade.node_id == legacy_node:
-            await coordinator.async_config_entry_first_refresh()
-        else:
-            # A single sleeping/offline shade must not block the whole hub.
-            await coordinator.async_refresh()
-        coordinators.append(coordinator)
+    runtime = Troy2ControllerRuntime(
+        hass,
+        [Troy2Api(session, host, shade, controller_context) for shade in shades],
+        controller_context,
+    )
+    await runtime.async_start()
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinators
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    async def _async_stop_runtime(event: Event) -> None:
+        await runtime.async_shutdown()
+
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_stop_runtime)
+    )
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+        await runtime.async_shutdown()
+        raise
     return True
 
 
@@ -176,7 +180,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a TRO.Y 2 config entry."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
-        coordinators: list[Troy2Coordinator] = hass.data[DOMAIN].pop(entry.entry_id)
-        for coordinator in coordinators:
-            await coordinator.async_shutdown()
+        runtime: Troy2ControllerRuntime = hass.data[DOMAIN].pop(entry.entry_id)
+        await runtime.async_shutdown()
     return unloaded
