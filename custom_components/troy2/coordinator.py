@@ -432,20 +432,35 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
             self._record_failure(state, err)
             self._update_movement_after_failure(state)
         else:
+            now = self._clock()
             if (
                 not state.api.shade.wired
                 and position == 0
                 and state.position not in (None, 0)
                 and state.target_position != 0
             ):
-                now = self._clock()
                 if state.unexpected_closed_since is None:
                     state.unexpected_closed_since = now
-                    _LOGGER.debug("Holding unexpected wireless closed position for confirmation")
-                if now - state.unexpected_closed_since < 45:
+                    _LOGGER.debug(
+                        "TRO.Y unexpected wireless closed position awaiting confirmation"
+                    )
+                elapsed = now - state.unexpected_closed_since
+                if elapsed < 45:
+                    # Communication succeeded, but this position has not been
+                    # verified. Keep the last published position and any
+                    # per-shade recovery/availability requirement intact.
                     self._record_success(state, verifies_state=False)
                     self._update_movement_after_failure(state)
                     return
+                _LOGGER.debug(
+                    "TRO.Y unexpected wireless closed position confirmed after %.1fs",
+                    elapsed,
+                )
+            elif state.unexpected_closed_since is not None:
+                _LOGGER.debug(
+                    "TRO.Y unexpected wireless closed position discarded after %.1fs",
+                    now - state.unexpected_closed_since,
+                )
             state.unexpected_closed_since = None
             state.position = position
             self._record_success(state)
@@ -472,8 +487,10 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
         state.failure_category = None
         state.failure_reason = None
         state.consecutive_failures = 0
-        state.confirmed_unavailable = False
         if verifies_state:
+            # A successful command or unconfirmed endpoint observation does
+            # not prove this shade's position has recovered after an outage.
+            state.confirmed_unavailable = False
             state.verification_required = False
         self._last_controller_success = now
         controller_recovered = self._controller_confirmed_unavailable
