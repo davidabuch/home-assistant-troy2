@@ -188,10 +188,13 @@ async def test_intermediate_wireless_command_keeps_endpoint_filter(hass) -> None
     await runtime.async_start()
     await runtime.async_set_position("000000", 25)
     assert runtime.shade_snapshot("000000").target_position == 25
+    # The background initial acquisition can have updated the initial
+    # fixture position; preserve whatever was last actually verified.
+    verified_before_glitch = runtime.shade_snapshot("000000").position
     clock.now += 2
     apis[0].async_get_position.return_value = 0
     await runtime._async_poll_state(state)
-    assert runtime.shade_snapshot("000000").position == 100
+    assert runtime.shade_snapshot("000000").position == verified_before_glitch
     assert state.unexpected_closed_since is not None
     apis[0].async_get_position.return_value = 25
     await runtime._async_poll_state(state)
