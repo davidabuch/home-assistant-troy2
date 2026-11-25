@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.3.18
+
+- Rejected malformed wireless positions outside 0–100 instead of treating clamped values as valid endpoints.
+- Retained verified TRO.Y-to-Home Assistant position inversion for wireless shades.
+- Required 45 seconds of persistent unexpected wireless fully-closed reports before publishing a position that would otherwise be immediately trusted.
+- Preserved previously verified positions and availability verification during unconfirmed reports, with normal communication failure and recovery handling.
+- Kept explicitly commanded closures, initial acquisition, intermediate positioning, wired shade controls, and controller scheduling behavior intact.
+- Added regressions for 20–41 second false closure events, persistent real closures, communications, movement tracking, and wired behavior.
+
 ## v0.3.17
 
 - Coordinated all shade polling and commands through one controller-level runtime.

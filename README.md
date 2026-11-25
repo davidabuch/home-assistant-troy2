@@ -79,7 +79,7 @@ This integration periodically reconciles with TRO.Y so Home Assistant can follow
 
 ## Target release
 
-**Version 0.3.17** introduces controller-level runtime coordination and corrected outage detection.
+**Version 0.3.18** adds wireless endpoint confirmation and invalid-position rejection, building on the v0.3.17 controller-level runtime and outage detection.
 
 The current implementation includes:
 
