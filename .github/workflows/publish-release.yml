@@ -1,0 +1,55 @@
+name: Publish validated release
+
+on:
+  workflow_run:
+    workflows:
+      - Validate
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Tag and publish validated main
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the validated commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Check validated SHA is still main and publish only new versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          current_main="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ "$current_main" != "$VALIDATED_SHA" ]; then
+            echo "Main advanced after validation; skip stale release"
+            exit 0
+          fi
+
+          version="$(python -c 'import json; print(json.load(open("custom_components/troy2/manifest.json"))["version"])')"
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists"
+            exit 0
+          fi
+          if git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
+            echo "Refusing to reuse existing tag $tag without a release"
+            exit 1
+          fi
+
+          gh release create "$tag" \
+            --target "$VALIDATED_SHA" \
+            --title "TRO.Y 2 $tag" \
+            --generate-notes
