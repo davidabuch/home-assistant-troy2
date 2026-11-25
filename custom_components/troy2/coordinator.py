@@ -41,6 +41,7 @@ class _ShadeRuntimeState:
     api: Troy2Api
     order: int
     position: int | None = None
+    unexpected_closed_since: float | None = None
     last_success: float | None = None
     last_attempt: float | None = None
     failure_started: float | None = None
@@ -425,11 +426,42 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
         try:
             position = await state.api.async_get_position()
         except Troy2Error as err:
+            state.unexpected_closed_since = None
             if err.shutdown:
                 return
             self._record_failure(state, err)
             self._update_movement_after_failure(state)
         else:
+            now = self._clock()
+            if (
+                not state.api.shade.wired
+                and position == 0
+                and state.position not in (None, 0)
+                and state.target_position != 0
+            ):
+                if state.unexpected_closed_since is None:
+                    state.unexpected_closed_since = now
+                    _LOGGER.debug(
+                        "TRO.Y unexpected wireless closed position awaiting confirmation"
+                    )
+                elapsed = now - state.unexpected_closed_since
+                if elapsed < 45:
+                    # Communication succeeded, but this position has not been
+                    # verified. Keep the last published position and any
+                    # per-shade recovery/availability requirement intact.
+                    self._record_success(state, verifies_state=False)
+                    self._update_movement_after_failure(state)
+                    return
+                _LOGGER.debug(
+                    "TRO.Y unexpected wireless closed position confirmed after %.1fs",
+                    elapsed,
+                )
+            elif state.unexpected_closed_since is not None:
+                _LOGGER.debug(
+                    "TRO.Y unexpected wireless closed position discarded after %.1fs",
+                    now - state.unexpected_closed_since,
+                )
+            state.unexpected_closed_since = None
             state.position = position
             self._record_success(state)
             self._update_movement_after_position(state, position)
@@ -455,8 +487,10 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
         state.failure_category = None
         state.failure_reason = None
         state.consecutive_failures = 0
-        state.confirmed_unavailable = False
         if verifies_state:
+            # A successful command or unconfirmed endpoint observation does
+            # not prove this shade's position has recovered after an outage.
+            state.confirmed_unavailable = False
             state.verification_required = False
         self._last_controller_success = now
         controller_recovered = self._controller_confirmed_unavailable
@@ -540,6 +574,7 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
         direction: str | None,
     ) -> None:
         now = self._clock()
+        state.unexpected_closed_since = None
         state.target_position = target_position
         state.movement_direction = direction
         state.rapid_polling = True

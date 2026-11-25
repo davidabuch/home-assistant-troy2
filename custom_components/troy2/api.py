@@ -366,7 +366,11 @@ class Troy2Api:
             value = int(data["ATTR"]["attrValue"])
         except (KeyError, TypeError, ValueError) as err:
             raise Troy2Error(f"Unexpected position response: {data}") from err
-        return max(0, min(100, value))
+        if not 0 <= value <= 100:
+            raise Troy2TransientPositionError(
+                f"TRO.Y wireless position outside 0–100: {value}"
+            )
+        return value
 
     async def _async_set_wireless_position(self, troy_position: int) -> None:
         """Set a wireless position using its current NWK address."""

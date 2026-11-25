@@ -65,6 +65,224 @@ def _state(runtime: Troy2ControllerRuntime, index: int):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("false_duration", [20, 21, 41])
+async def test_wireless_false_closure_does_not_publish(
+    hass, false_duration: int,
+) -> None:
+    """Observed false endpoints must not change the public position."""
+    runtime, apis, clock = _runtime(hass, 1)
+    apis[0].shade.wired = False
+    state = _state(runtime, 0)
+    apis[0].async_get_position.return_value = 25
+    await runtime._async_poll_state(state)
+    assert runtime.shade_snapshot("000000").position == 25
+
+    clock.now = 100
+    apis[0].async_get_position.return_value = 0
+    await runtime._async_poll_state(state)
+    assert state.unexpected_closed_since == 100
+    assert runtime.shade_snapshot("000000").position == 25
+    assert runtime.shade_snapshot("000000").available
+
+    clock.now += false_duration
+    apis[0].async_get_position.return_value = 25
+    await runtime._async_poll_state(state)
+    assert state.unexpected_closed_since is None
+    assert runtime.shade_snapshot("000000").position == 25
+
+
+@pytest.mark.asyncio
+async def test_wireless_repeated_false_closed_values_require_full_confirmation(
+    hass,
+) -> None:
+    runtime, apis, clock = _runtime(hass, 1)
+    apis[0].shade.wired = False
+    state = _state(runtime, 0)
+    apis[0].async_get_position.return_value = 25
+    await runtime._async_poll_state(state)
+    apis[0].async_get_position.return_value = 0
+
+    for now in (100, 120, 141, 144):
+        clock.now = now
+        await runtime._async_poll_state(state)
+        assert runtime.shade_snapshot("000000").position == 25
+
+    clock.now = 145
+    await runtime._async_poll_state(state)
+    assert runtime.shade_snapshot("000000").position == 0
+    assert state.unexpected_closed_since is None
+    assert runtime.shade_snapshot("000000").available
+
+
+@pytest.mark.asyncio
+async def test_wireless_isolated_false_closed_observation_restarts_confirmation(
+    hass,
+) -> None:
+    runtime, apis, clock = _runtime(hass, 1)
+    apis[0].shade.wired = False
+    state = _state(runtime, 0)
+    apis[0].async_get_position.return_value = 25
+    await runtime._async_poll_state(state)
+
+    for now, value in [(10, 0), (30, 25), (40, 0), (65, 0)]:
+        clock.now = now
+        apis[0].async_get_position.return_value = value
+        await runtime._async_poll_state(state)
+        assert runtime.shade_snapshot("000000").position == 25
+
+    clock.now = 86
+    await runtime._async_poll_state(state)
+    assert runtime.shade_snapshot("000000").position == 0
+
+
+@pytest.mark.asyncio
+async def test_wireless_external_manual_closure_is_eventually_published(hass) -> None:
+    runtime, apis, clock = _runtime(hass, 1)
+    apis[0].shade.wired = False
+    state = _state(runtime, 0)
+    apis[0].async_get_position.return_value = 75
+    await runtime._async_poll_state(state)
+    assert runtime.shade_snapshot("000000").position == 75
+
+    clock.now = 10
+    apis[0].async_get_position.return_value = 0
+    await runtime._async_poll_state(state)
+    clock.now = 56
+    await runtime._async_poll_state(state)
+    assert runtime.shade_snapshot("000000").position == 0
+
+
+@pytest.mark.asyncio
+async def test_wireless_initial_closed_position_does_not_wait(hass) -> None:
+    runtime, apis, _ = _runtime(hass, 1)
+    apis[0].shade.wired = False
+    apis[0].async_get_position.return_value = 0
+    await runtime._async_poll_state(_state(runtime, 0))
+    assert runtime.shade_snapshot("000000").position == 0
+    assert runtime.shade_snapshot("000000").available
+
+
+@pytest.mark.asyncio
+async def test_explicit_close_bypasses_wireless_endpoint_confirmation(hass) -> None:
+    runtime, apis, clock = _runtime(hass, 1)
+    apis[0].shade.wired = False
+    state = _state(runtime, 0)
+    state.position = 25
+    await runtime.async_start()
+    await runtime.async_close("000000")
+    assert runtime.shade_snapshot("000000").target_position == 0
+    clock.now += 2
+    apis[0].async_get_position.return_value = 0
+    await runtime._async_poll_state(state)
+    assert runtime.shade_snapshot("000000").position == 0
+    assert not runtime.shade_snapshot("000000").rapid_polling
+    await runtime.async_shutdown()
+
+
+@pytest.mark.asyncio
+async def test_intermediate_wireless_command_keeps_endpoint_filter(hass) -> None:
+    runtime, apis, clock = _runtime(hass, 1)
+    apis[0].shade.wired = False
+    state = _state(runtime, 0)
+    state.position = 100
+    await runtime.async_start()
+    await runtime.async_set_position("000000", 25)
+    assert runtime.shade_snapshot("000000").target_position == 25
+    # The background initial acquisition can have updated the initial
+    # fixture position; preserve whatever was last actually verified.
+    verified_before_glitch = runtime.shade_snapshot("000000").position
+    clock.now += 2
+    apis[0].async_get_position.return_value = 0
+    await runtime._async_poll_state(state)
+    assert runtime.shade_snapshot("000000").position == verified_before_glitch
+    assert state.unexpected_closed_since is not None
+    apis[0].async_get_position.return_value = 25
+    await runtime._async_poll_state(state)
+    assert runtime.shade_snapshot("000000").position == 25
+    await runtime.async_shutdown()
+
+
+@pytest.mark.asyncio
+async def test_wireless_failed_poll_restarts_endpoint_confirmation(hass) -> None:
+    runtime, apis, clock = _runtime(hass, 1)
+    apis[0].shade.wired = False
+    state = _state(runtime, 0)
+    state.position = 25
+    apis[0].async_get_position.return_value = 0
+    clock.now = 10
+    await runtime._async_poll_state(state)
+    clock.now = 40
+    apis[0].async_get_position.side_effect = Troy2TimeoutError("timeout")
+    await runtime._async_poll_state(state)
+    assert state.unexpected_closed_since is None
+    assert runtime.shade_snapshot("000000").position == 25
+
+    apis[0].async_get_position.side_effect = None
+    clock.now = 41
+    await runtime._async_poll_state(state)
+    assert state.unexpected_closed_since == 41
+    clock.now = 70
+    await runtime._async_poll_state(state)
+    assert runtime.shade_snapshot("000000").position == 25
+
+
+@pytest.mark.asyncio
+async def test_wireless_recovery_requires_verified_position(hass) -> None:
+    runtime, apis, clock = _runtime(hass, 1)
+    apis[0].shade.wired = False
+    state = _state(runtime, 0)
+    state.position = 25
+    state.last_success = 0
+    state.confirmed_unavailable = True
+    state.verification_required = True
+    apis[0].async_get_position.return_value = 0
+
+    clock.now = 100
+    await runtime._async_poll_state(state)
+    assert not runtime.shade_snapshot("000000").available
+    assert runtime.shade_snapshot("000000").position == 25
+    assert state.verification_required
+    assert state.confirmed_unavailable
+
+    clock.now = 110
+    apis[0].async_get_position.return_value = 25
+    await runtime._async_poll_state(state)
+    assert runtime.shade_snapshot("000000").available
+    assert not state.verification_required
+    assert not state.confirmed_unavailable
+
+
+@pytest.mark.asyncio
+async def test_wireless_movement_clears_pending_endpoint_confirmation(hass) -> None:
+    runtime, apis, clock = _runtime(hass, 1)
+    apis[0].shade.wired = False
+    state = _state(runtime, 0)
+    state.position = 25
+    clock.now = 10
+    apis[0].async_get_position.return_value = 0
+    await runtime._async_poll_state(state)
+    assert state.unexpected_closed_since == 10
+
+    clock.now = 11
+    runtime._start_movement(state, target_position=0, direction="closing")
+    assert state.unexpected_closed_since is None
+    await runtime._async_poll_state(state)
+    assert runtime.shade_snapshot("000000").position == 0
+
+
+@pytest.mark.asyncio
+async def test_wired_endpoint_remains_immediate(hass) -> None:
+    runtime, apis, clock = _runtime(hass, 1)
+    state = _state(runtime, 0)
+    state.position = 25
+    clock.now = 10
+    apis[0].async_get_position.return_value = 0
+    await runtime._async_poll_state(state)
+    assert runtime.shade_snapshot("000000").position == 0
+    assert state.unexpected_closed_since is None
+
+
+@pytest.mark.asyncio
 async def test_alexis_old_success_first_new_failure_never_unavailable(
     hass,
     caplog,
