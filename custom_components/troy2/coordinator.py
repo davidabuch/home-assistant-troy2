@@ -41,6 +41,7 @@ class _ShadeRuntimeState:
     api: Troy2Api
     order: int
     position: int | None = None
+    unexpected_closed_since: float | None = None
     last_success: float | None = None
     last_attempt: float | None = None
     failure_started: float | None = None
@@ -425,11 +426,27 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
         try:
             position = await state.api.async_get_position()
         except Troy2Error as err:
+            state.unexpected_closed_since = None
             if err.shutdown:
                 return
             self._record_failure(state, err)
             self._update_movement_after_failure(state)
         else:
+            if (
+                not state.api.shade.wired
+                and position == 0
+                and state.position not in (None, 0)
+                and state.target_position != 0
+            ):
+                now = self._clock()
+                if state.unexpected_closed_since is None:
+                    state.unexpected_closed_since = now
+                    _LOGGER.debug("Holding unexpected wireless closed position for confirmation")
+                if now - state.unexpected_closed_since < 45:
+                    self._record_success(state, verifies_state=False)
+                    self._update_movement_after_failure(state)
+                    return
+            state.unexpected_closed_since = None
             state.position = position
             self._record_success(state)
             self._update_movement_after_position(state, position)
@@ -540,6 +557,7 @@ class Troy2ControllerRuntime(DataUpdateCoordinator[dict[str, int]]):
         direction: str | None,
     ) -> None:
         now = self._clock()
+        state.unexpected_closed_since = None
         state.target_position = target_position
         state.movement_direction = direction
         state.rapid_polling = True
