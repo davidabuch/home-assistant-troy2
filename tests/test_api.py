@@ -77,6 +77,31 @@ async def test_wired_transient_position_responses(response: dict) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("raw_value", [-1, 101, 255])
+async def test_wireless_invalid_position_is_not_clamped(raw_value: int) -> None:
+    api = _api(_shade("00124B0000000001", wired=False, node_id="1234"))
+    api._async_request = AsyncMock(
+        return_value={"ATTR": {"attrValue": str(raw_value)}}
+    )
+
+    with pytest.raises(Troy2TransientPositionError):
+        await api.async_get_position()
+
+    assert api._async_request.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("raw_value", "expected"), [(0, 100), (75, 25), (100, 0)])
+async def test_wireless_position_scale(raw_value: int, expected: int) -> None:
+    api = _api(_shade("00124B0000000001", wired=False, node_id="1234"))
+    api._async_request = AsyncMock(
+        return_value={"ATTR": {"attrValue": str(raw_value)}}
+    )
+
+    assert await api.async_get_position() == expected
+
+
+@pytest.mark.asyncio
 async def test_wireless_file_empty_does_not_trigger_node_lookup() -> None:
     api = _api(_shade("00124B0000000001", wired=False, node_id="1234"))
     api._async_request = AsyncMock(
